@@ -19,6 +19,7 @@ class DatabaseManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
+            # Основная таблица подписок
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,6 +33,7 @@ class DatabaseManager:
                 )
             ''')
             
+            # Таблица настроек уведомлений
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS notifications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +44,7 @@ class DatabaseManager:
                 )
             ''')
             
+            # Таблица обращений в поддержку
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS support_requests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,11 +56,81 @@ class DatabaseManager:
                 )
             ''')
             
+            # ТАБЛИЦА СЕССИЙ - новое!
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_sessions (
+                    user_id INTEGER PRIMARY KEY,
+                    session_data TEXT,
+                    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             conn.commit()
             conn.close()
-            print("База данных инициализирована")
+            print("✅ База данных инициализирована")
         except Exception as e:
-            print(f"Ошибка БД: {e}")
+            print(f"❌ Ошибка БД: {e}")
+    
+    def save_user_session(self, user_id, session_data):
+        """Сохранение сессии пользователя в БД"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO user_sessions (user_id, session_data, last_activity)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+            ''', (user_id, json.dumps(session_data)))
+            conn.commit()
+            conn.close()
+            print(f"✅ Сессия сохранена для пользователя {user_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Ошибка сохранения сессии: {e}")
+            return False
+    
+    def get_user_session(self, user_id):
+        """Получение сессии пользователя из БД"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Удаляем устаревшие сессии (старше 1 часа)
+            cursor.execute('''
+                DELETE FROM user_sessions 
+                WHERE datetime(last_activity) < datetime('now', '-1 hour')
+            ''')
+            
+            cursor.execute('''
+                SELECT session_data FROM user_sessions WHERE user_id = ?
+            ''', (user_id,))
+            
+            result = cursor.fetchone()
+            conn.commit()
+            conn.close()
+            
+            if result:
+                session_data = json.loads(result[0])
+                print(f"✅ Сессия восстановлена для пользователя {user_id}: {session_data}")
+                return session_data
+            return None
+            
+        except Exception as e:
+            print(f"❌ Ошибка получения сессии: {e}")
+            return None
+    
+    def delete_user_session(self, user_id):
+        """Удаление сессии пользователя"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM user_sessions WHERE user_id = ?', (user_id,))
+            conn.commit()
+            conn.close()
+            print(f"✅ Сессия удалена для пользователя {user_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Ошибка удаления сессии: {e}")
+            return False
     
     def add_subscription(self, user_id, service_name, price, charge_day, next_charge_date):
         """Добавление подписки в базу"""
@@ -85,7 +158,7 @@ class DatabaseManager:
             return True, "Подписка успешно добавлена"
             
         except Exception as e:
-            print(f"Ошибка добавления подписки: {e}")
+            print(f"❌ Ошибка добавления подписки: {e}")
             return False, "Ошибка при добавлении подписки"
     
     def get_user_subscriptions(self, user_id):
@@ -106,7 +179,7 @@ class DatabaseManager:
             return subscriptions
             
         except Exception as e:
-            print(f"Ошибка получения подписок: {e}")
+            print(f"❌ Ошибка получения подписок: {e}")
             return []
     
     def delete_subscription(self, user_id, service_name):
@@ -126,7 +199,7 @@ class DatabaseManager:
             return True, "Подписка удалена"
             
         except Exception as e:
-            print(f"Ошибка удаления подписки: {e}")
+            print(f"❌ Ошибка удаления подписки: {e}")
             return False, "Ошибка при удалении подписки"
     
     def update_subscription_date(self, user_id, subscription_id, next_charge_date):
@@ -146,7 +219,7 @@ class DatabaseManager:
             return True, "Дата списания обновлена"
             
         except Exception as e:
-            print(f"Ошибка обновления даты: {e}")
+            print(f"❌ Ошибка обновления даты: {e}")
             return False, "Ошибка при обновлении даты"
     
     def get_notification_settings(self, user_id):
@@ -171,7 +244,7 @@ class DatabaseManager:
                 return default_settings
                 
         except Exception as e:
-            print(f"Ошибка получения настроек: {e}")
+            print(f"❌ Ошибка получения настроек: {e}")
             return {'days_before': 3, 'is_active': True}
     
     def set_notification_settings(self, user_id, settings):
@@ -189,7 +262,7 @@ class DatabaseManager:
             conn.close()
             return True
         except Exception as e:
-            print(f"Ошибка сохранения настроек: {e}")
+            print(f"❌ Ошибка сохранения настроек: {e}")
             return False
     
     def add_support_request(self, user_id, message):
@@ -205,9 +278,10 @@ class DatabaseManager:
             
             conn.commit()
             conn.close()
+            print(f"✅ Обращение в поддержку сохранено от пользователя {user_id}")
             return True
         except Exception as e:
-            print(f"Ошибка сохранения обращения: {e}")
+            print(f"❌ Ошибка сохранения обращения: {e}")
             return False
 
 class SubscriptionManager:
@@ -217,30 +291,33 @@ class SubscriptionManager:
         'Яндекс Плюс': {'price': 399, 'description': 'Кино, музыка, доставка'},
         'СберПрайм': {'price': 299, 'description': 'Okko, музыка, доставка'},
         'Ozon Premium': {'price': 199, 'description': 'Бесплатная доставка'},
+        'МТС Premium': {'price': 299, 'description': 'Кино, музыка, скидки'},
         'ВБ Клуб': {'price': 199, 'description': 'Бесплатная доставка'},
         'VK Музыка': {'price': 199, 'description': 'Музыка без ограничений'},
-        'Яндекс Музыка': {'price': 169, 'description': 'Каталог музыки'},
+        'Магнит Плюс': {'price': 199, 'description': 'Скидки в магазинах'},
         'IVI': {'price': 399, 'description': 'Фильмы и сериалы'},
         'START': {'price': 299, 'description': 'Русские сериалы'},
-        'More.tv': {'price': 299, 'description': 'Эксклюзивный контент'},
+        'Газпром Бонус': {'price': 299, 'description': 'Топливо и подписки'},
         'Wink': {'price': 349, 'description': 'Ростелеком кино'},
-        'ВТБ Плюс': {'price': 199, 'description': 'Премиум подписка ВТБ'},
-        'МТС Premium': {'price': 299, 'description': 'Кино, музыка, скидки'}
+        'ВТБ Плюс': {'price': 199, 'description': 'Премиум подписка ВТБ'}
     }
     
     @classmethod
     def get_main_keyboard(cls):
+        """Главная клавиатура - кнопка добавления вверху"""
         return {
             'keyboard': [
+                [{'text': '➕ Добавить подписку'}],
                 [{'text': '📋 Мои подписки'}, {'text': '💰 Аналитика'}],
                 [{'text': '🔔 Уведомления'}, {'text': '⚖️ О законе'}],
-                [{'text': '➕ Добавить подписку'}]
+                [{'text': '💝 Поддержать проект'}, {'text': '📢 Реклама'}]
             ],
             'resize_keyboard': True
         }
     
     @classmethod
     def get_subscriptions_keyboard(cls):
+        """Клавиатура выбора подписок"""
         subscriptions = list(cls.POPULAR_SUBSCRIPTIONS.keys())
         keyboard = []
         
@@ -260,6 +337,7 @@ class SubscriptionManager:
     
     @classmethod
     def get_cancel_keyboard(cls):
+        """Клавиатура для отмены"""
         return {
             'keyboard': [[{'text': '❌ Отмена'}]],
             'resize_keyboard': True
@@ -267,6 +345,7 @@ class SubscriptionManager:
     
     @classmethod
     def get_notifications_keyboard(cls):
+        """Клавиатура настроек уведомлений"""
         return {
             'keyboard': [
                 [{'text': '🔔 За 3 дня'}, {'text': '🔔 За 1 день'}],
@@ -277,14 +356,25 @@ class SubscriptionManager:
         }
     
     @classmethod
+    def get_support_keyboard(cls):
+        """Клавиатура поддержки"""
+        return {
+            'keyboard': [
+                [{'text': '💝 Поддержать проект'}, {'text': '📢 Реклама'}],
+                [{'text': '🔙 Главное меню'}]
+            ],
+            'resize_keyboard': True
+        }
+    
+    @classmethod
     def get_subscription_info(cls, service_name):
+        """Информация о подписке"""
         return cls.POPULAR_SUBSCRIPTIONS.get(service_name)
 
 class BotHandler(BaseHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         self.db = DatabaseManager()
         self.sub_manager = SubscriptionManager()
-        self.user_sessions = {}
         self.telegram_token = "8459093402:AAG8iTjrqDuv3OmEkF4aLpyiZzZrsOqC_4o"
         self.telegram_url = f"https://api.telegram.org/bot{self.telegram_token}/"
         super().__init__(*args, **kwargs)
@@ -357,14 +447,14 @@ class BotHandler(BaseHTTPRequestHandler):
         """Основная логика обработки сообщений"""
         print(f"🔍 Обработка сообщения от {chat_id}: '{text}'")
         
-        # ВАЖНО: Сначала проверяем активные сессии
-        if chat_id in self.user_sessions:
-            session = self.user_sessions[chat_id]
-            print(f"🎯 Активная сессия: {session}")
+        # ВАЖНО: Сначала проверяем активные сессии из БД
+        session = self.db.get_user_session(chat_id)
+        if session:
+            print(f"🎯 Активная сессия из БД: {session}")
             
             if session.get('adding_subscription'):
                 print("🔄 Обработка добавления подписки")
-                self._handle_subscription_flow(chat_id, text)
+                self._handle_subscription_flow(chat_id, text, session)
                 return
             elif session.get('waiting_support'):
                 print("🔄 Обработка обращения в поддержку")
@@ -372,13 +462,12 @@ class BotHandler(BaseHTTPRequestHandler):
                 return
             elif session.get('changing_date'):
                 print("🔄 Обработка изменения даты")
-                self._handle_date_change(chat_id, text)
+                self._handle_date_change(chat_id, text, session)
                 return
         
         # Затем обрабатываем команды
         if text in ['❌ Отмена', '🔙 Назад', '🔙 Главное меню', '/start']:
-            if chat_id in self.user_sessions:
-                del self.user_sessions[chat_id]
+            self.db.delete_user_session(chat_id)
             self._show_main_menu(chat_id)
             return
         
@@ -395,16 +484,20 @@ class BotHandler(BaseHTTPRequestHandler):
             self._show_notifications_settings(chat_id)
         elif text == '/unsub':
             self._show_unsubscribe(chat_id)
-        elif text == '📋 Мои подписки':
-            self._show_my_subscriptions(chat_id)
         elif text == '➕ Добавить подписку':
             self._show_subscriptions_menu(chat_id)
+        elif text == '📋 Мои подписки':
+            self._show_my_subscriptions(chat_id)
         elif text == '🔔 Уведомления':
             self._show_notifications_settings(chat_id)
         elif text == '💰 Аналитика':
             self._show_analytics(chat_id)
         elif text == '⚖️ О законе':
             self._show_laws(chat_id)
+        elif text == '💝 Поддержать проект':
+            self._show_donate(chat_id)
+        elif text == '📢 Реклама':
+            self._show_advertisement(chat_id)
         elif text == '✍️ Ввести свою подписку':
             self._start_custom_subscription(chat_id)
         elif text in self.sub_manager.POPULAR_SUBSCRIPTIONS:
@@ -427,15 +520,16 @@ class BotHandler(BaseHTTPRequestHandler):
     def _start_support_request(self, chat_id):
         """Начало обращения в поддержку"""
         print(f"🎯 Начало обращения в поддержку для {chat_id}")
-        self.user_sessions[chat_id] = {
-            'waiting_support': True
-        }
+        session_data = {'waiting_support': True}
+        self.db.save_user_session(chat_id, session_data)
         
         self._send_telegram_message(
             chat_id,
             """💬 *Обращение в поддержку*
 
 Опишите вашу проблему или вопрос, и мы обязательно вам поможем!
+
+*Для срочных вопросов:* @adamkhan
 
 Напишите ваше сообщение:""",
             self.sub_manager.get_cancel_keyboard()
@@ -446,13 +540,13 @@ class BotHandler(BaseHTTPRequestHandler):
         print(f"📝 Обработка обращения: {text}")
         
         if text == '❌ Отмена':
-            del self.user_sessions[chat_id]
+            self.db.delete_user_session(chat_id)
             self._show_main_menu(chat_id)
             return
         
         success = self.db.add_support_request(chat_id, text)
         
-        del self.user_sessions[chat_id]
+        self.db.delete_user_session(chat_id)
         
         if success:
             response_text = """✅ *Ваше обращение принято!*
@@ -460,7 +554,7 @@ class BotHandler(BaseHTTPRequestHandler):
 Мы получили ваше сообщение и в ближайшее время с вами свяжется наш специалист.
 
 💡 *Обычно мы отвечаем в течение 24 часов.*
-📧 *Для срочных вопросов: support@podpiski-control.ru*"""
+👤 *Для срочных вопросов:* @adamkhan"""
         else:
             response_text = "❌ *Произошла ошибка при отправке обращения*"
         
@@ -473,10 +567,11 @@ class BotHandler(BaseHTTPRequestHandler):
     def _start_custom_subscription(self, chat_id):
         """Начало добавления своей подписки"""
         print(f"🎯 Начало добавления своей подписки для {chat_id}")
-        self.user_sessions[chat_id] = {
+        session_data = {
             'adding_subscription': True,
             'step': 'name'
         }
+        self.db.save_user_session(chat_id, session_data)
         
         self._send_telegram_message(
             chat_id,
@@ -484,13 +579,12 @@ class BotHandler(BaseHTTPRequestHandler):
             self.sub_manager.get_cancel_keyboard()
         )
     
-    def _handle_subscription_flow(self, chat_id, text):
+    def _handle_subscription_flow(self, chat_id, text, session):
         """Обработка добавления своей подписки"""
-        session = self.user_sessions[chat_id]
         print(f"🔄 Шаг {session['step']}: {text}")
         
         if text == '❌ Отмена':
-            del self.user_sessions[chat_id]
+            self.db.delete_user_session(chat_id)
             self._show_main_menu(chat_id)
             return
         
@@ -505,6 +599,7 @@ class BotHandler(BaseHTTPRequestHandler):
             
             session['name'] = text.strip()
             session['step'] = 'price'
+            self.db.save_user_session(chat_id, session)
             
             self._send_telegram_message(
                 chat_id,
@@ -525,6 +620,7 @@ class BotHandler(BaseHTTPRequestHandler):
                 
                 session['price'] = price
                 session['step'] = 'date'
+                self.db.save_user_session(chat_id, session)
                 
                 current_year = datetime.now().year
                 
@@ -587,7 +683,7 @@ class BotHandler(BaseHTTPRequestHandler):
                     next_charge_date
                 )
                 
-                del self.user_sessions[chat_id]
+                self.db.delete_user_session(chat_id)
                 
                 if success:
                     settings = self.db.get_notification_settings(chat_id)
@@ -628,6 +724,126 @@ class BotHandler(BaseHTTPRequestHandler):
 Введите дату:""",
                     self.sub_manager.get_cancel_keyboard()
                 )
+
+    def _start_date_change(self, chat_id, subscription_id):
+        """Начало изменения даты списания"""
+        session_data = {
+            'changing_date': True,
+            'subscription_id': subscription_id
+        }
+        self.db.save_user_session(chat_id, session_data)
+        
+        current_year = datetime.now().year
+        
+        self._send_telegram_message(
+            chat_id,
+            f"""📅 *Изменение даты списания*
+
+Введите новую дату списания:
+
+*Формат:*
+• **ДД.ММ** - для {current_year} года  
+• **ДД.ММ.ГГ** - для следующего года
+
+*Пример:*
+15.06 - 15 июня
+25.12.25 - 25 декабря {current_year + 1}""",
+            self.sub_manager.get_cancel_keyboard()
+        )
+    
+    def _handle_date_change(self, chat_id, text, session):
+        """Обработка изменения даты списания"""
+        subscription_id = session['subscription_id']
+        
+        try:
+            today = datetime.now()
+            current_year = today.year
+            
+            if re.match(r'^\d{1,2}\.\d{1,2}$', text):
+                day, month = map(int, text.split('.'))
+                charge_date = today.replace(month=month, day=day, year=current_year)
+                
+                if charge_date < today:
+                    charge_date = charge_date.replace(year=current_year + 1)
+                
+                next_charge_date = charge_date.strftime("%d.%m.%Y")
+            
+            elif re.match(r'^\d{1,2}\.\d{1,2}\.\d{2}$', text):
+                day, month, year = map(int, text.split('.'))
+                full_year = 2000 + year if year < 100 else year
+                charge_date = today.replace(year=full_year, month=month, day=day)
+                next_charge_date = charge_date.strftime("%d.%m.%Y")
+            
+            else:
+                raise ValueError("Неверный формат даты")
+            
+            if charge_date <= today:
+                raise ValueError("Дата должна быть в будущем")
+            
+            success, message = self.db.update_subscription_date(chat_id, subscription_id, next_charge_date)
+            
+            self.db.delete_user_session(chat_id)
+            
+            if success:
+                response_text = f"✅ *Дата списания обновлена!*\n\nНовая дата: {next_charge_date}"
+            else:
+                response_text = f'❌ *{message}*'
+            
+            self._send_telegram_message(
+                chat_id,
+                response_text,
+                self.sub_manager.get_main_keyboard()
+            )
+            
+        except ValueError as e:
+            self._send_telegram_message(
+                chat_id,
+                f"❌ {str(e)}\n\nВведите дату в формате ДД.ММ или ДД.ММ.ГГ:",
+                self.sub_manager.get_cancel_keyboard()
+            )
+
+    def _show_donate(self, chat_id):
+        """Поддержать проект"""
+        self._send_telegram_message(
+            chat_id,
+            """💝 *Поддержать проект*
+
+Если наш сервис помогает вам экономить и контролировать подписки, вы можете поддержать развитие проекта:
+
+🤝 *Реквизиты для поддержки:*
+• Тинькофф: 5536 9138 1234 5678
+• Сбербанк: 2202 2023 4567 8901
+
+💡 *Любая сумма помогает развивать сервис!*
+
+Спасибо за вашу поддержку! 🙏""",
+            self.sub_manager.get_support_keyboard()
+        )
+    
+    def _show_advertisement(self, chat_id):
+        """Реклама"""
+        self._send_telegram_message(
+            chat_id,
+            """📢 *Реклама в боте*
+
+*Разместите рекламу в нашем боте!*
+
+🎯 *Наша аудитория:*
+• Активные пользователи подписок
+• Финансово грамотные люди
+• Целевая аудитория 18-45 лет
+
+📊 *Статистика:*
+• 1000+ активных пользователей
+• Высокая вовлеченность
+• Тематическое соответствие
+
+💼 *Для размещения рекламы:*
+👤 Свяжитесь: @adamkhan
+
+*Эффективный способ продвижения ваших услуг!*""",
+            self.sub_manager.get_support_keyboard()
+        )
 
     # Остальные методы остаются без изменений
     def _show_main_menu(self, chat_id):
@@ -736,73 +952,6 @@ class BotHandler(BaseHTTPRequestHandler):
             response_text,
             self.sub_manager.get_main_keyboard()
         )
-    
-    def _start_date_change(self, chat_id, subscription_id):
-        self.user_sessions[chat_id] = {
-            'changing_date': True,
-            'subscription_id': subscription_id
-        }
-        
-        current_year = datetime.now().year
-        
-        self._send_telegram_message(
-            chat_id,
-            f"""📅 *Изменение даты списания*
-
-Введите новую дату списания:""",
-            self.sub_manager.get_cancel_keyboard()
-        )
-    
-    def _handle_date_change(self, chat_id, text):
-        session = self.user_sessions[chat_id]
-        subscription_id = session['subscription_id']
-        
-        try:
-            today = datetime.now()
-            current_year = today.year
-            
-            if re.match(r'^\d{1,2}\.\d{1,2}$', text):
-                day, month = map(int, text.split('.'))
-                charge_date = today.replace(month=month, day=day, year=current_year)
-                
-                if charge_date < today:
-                    charge_date = charge_date.replace(year=current_year + 1)
-                
-                next_charge_date = charge_date.strftime("%d.%m.%Y")
-            
-            elif re.match(r'^\d{1,2}\.\d{1,2}\.\d{2}$', text):
-                day, month, year = map(int, text.split('.'))
-                full_year = 2000 + year if year < 100 else year
-                charge_date = today.replace(year=full_year, month=month, day=day)
-                next_charge_date = charge_date.strftime("%d.%m.%Y")
-            
-            else:
-                raise ValueError("Неверный формат даты")
-            
-            if charge_date <= today:
-                raise ValueError("Дата должна быть в будущем")
-            
-            success, message = self.db.update_subscription_date(chat_id, subscription_id, next_charge_date)
-            
-            del self.user_sessions[chat_id]
-            
-            if success:
-                response_text = f"✅ *Дата списания обновлена!*\n\nНовая дата: {next_charge_date}"
-            else:
-                response_text = f'❌ *{message}*'
-            
-            self._send_telegram_message(
-                chat_id,
-                response_text,
-                self.sub_manager.get_main_keyboard()
-            )
-            
-        except ValueError as e:
-            self._send_telegram_message(
-                chat_id,
-                f"❌ {str(e)}\n\nВведите дату в формате ДД.ММ или ДД.ММ.ГГ:",
-                self.sub_manager.get_cancel_keyboard()
-            )
     
     def _show_notifications_settings(self, chat_id):
         settings = self.db.get_notification_settings(chat_id)
