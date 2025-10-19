@@ -104,16 +104,85 @@ class DatabaseManager:
             print(f"❌ Ошибка удаления подписки: {e}")
             return False, "Ошибка при удалении подписки"
 
+class SubscriptionManager:
+    """Менеджер популярных подписок"""
+    
+    POPULAR_SUBSCRIPTIONS = {
+        'Яндекс Плюс': {'price': 399, 'description': 'Кино, музыка, доставка'},
+        'СберПрайм': {'price': 299, 'description': 'Okko, музыка, доставка'},
+        'Ozon Premium': {'price': 199, 'description': 'Бесплатная доставка'},
+        'ВБ Клуб': {'price': 199, 'description': 'Бесплатная доставка'},
+        'VK Музыка': {'price': 199, 'description': 'Музыка без ограничений'},
+        'Яндекс Музыка': {'price': 169, 'description': 'Каталог музыки'},
+        'IVI': {'price': 399, 'description': 'Фильмы и сериалы'},
+        'START': {'price': 299, 'description': 'Русские сериалы'},
+        'More.tv': {'price': 299, 'description': 'Эксклюзивный контент'},
+        'Wink': {'price': 349, 'description': 'Ростелеком кино'},
+        'PREMIER': {'price': 399, 'description': 'Эксклюзивы и шоу'},
+        'Кинопоиск': {'price': 399, 'description': 'Фильмы и сериалы'},
+        'Магнит Премиум': {'price': 199, 'description': 'Скидки в магазинах'},
+        'Alfa Only': {'price': 199, 'description': 'Премиум банк'},
+        'ВТБ Плюс': {'price': 199, 'description': 'Подписка ВТБ'},
+        'МТС Premium': {'price': 299, 'description': 'Кино, музыка, скидки'},
+        'Т-Банк Pro': {'price': 299, 'description': 'Премиум банк'},
+        'Газпром Бонус': {'price': 299, 'description': 'Топливо и подписки'},
+        'Пакет X5': {'price': 149, 'description': 'Скидки в Пятерочке'},
+        'Сотовые услуги': {'price': 300, 'description': 'Ежемесячная связь'}
+    }
+    
+    @classmethod
+    def get_main_keyboard(cls):
+        """Главная клавиатура"""
+        return {
+            'keyboard': [
+                [{'text': '📋 Управление подписками'}],
+                [{'text': '⚖️ О законе'}, {'text': '❓ Помощь'}],
+                [{'text': '📊 Мои подписки'}, {'text': '➕ Быстро добавить'}]
+            ],
+            'resize_keyboard': True
+        }
+    
+    @classmethod
+    def get_subscriptions_keyboard(cls):
+        """Клавиатура управления подписками"""
+        subscriptions = list(cls.POPULAR_SUBSCRIPTIONS.keys())
+        keyboard = []
+        
+        # Группируем по 2 подписки в ряд для компактности
+        for i in range(0, min(12, len(subscriptions)), 2):
+            row = [
+                {'text': subscriptions[i]}, 
+                {'text': subscriptions[i+1] if i+1 < len(subscriptions) else '📄 Ещё...'}
+            ]
+            keyboard.append(row)
+        
+        # Сервисные кнопки
+        keyboard.extend([
+            [{'text': '➕ Своя подписка'}, {'text': '📊 Мои подписки'}],
+            [{'text': '🗑️ Удалить подписку'}, {'text': '🔙 Главное меню'}]
+        ])
+        
+        return {
+            'keyboard': keyboard,
+            'resize_keyboard': True
+        }
+    
+    @classmethod
+    def get_subscription_info(cls, service_name):
+        """Информация о подписке"""
+        return cls.POPULAR_SUBSCRIPTIONS.get(service_name)
+
 class BotHandler(BaseHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         self.db = DatabaseManager()
+        self.sub_manager = SubscriptionManager()
         super().__init__(*args, **kwargs)
     
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write('Bot is running with database!'.encode('utf-8'))
+        self.wfile.write('Bot is running with enhanced interface!'.encode('utf-8'))
     
     def do_POST(self):
         try:
@@ -139,52 +208,25 @@ class BotHandler(BaseHTTPRequestHandler):
         self.end_headers()
     
     def process_message(self, chat_id, text):
-        # Популярные подписки с ценами
-        popular_subscriptions = {
-            'Яндекс Плюс': 399,
-            'СберПрайм': 299,
-            'Ozon Premium': 199,
-            'ВБ Клуб': 199,
-            'VK Музыка': 199,
-            'Сотовые услуги': 300
-        }
-        
-        if text == '/start':
-            keyboard = [
-                [{'text': 'Управление подписками'}],
-                [{'text': 'О законе'}, {'text': 'Помощь'}]
-            ]
-            
+        if text == '/start' or text == '🔙 Главное меню':
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': 'Добро пожаловать! Используйте кнопки для управления подписками.',
-                'reply_markup': {
-                    'keyboard': keyboard,
-                    'resize_keyboard': True
-                }
+                'text': '🎯 *Единый Центр Контроля Подписок*\n\nВаш персональный помощник в управлении подписками\n\n*Выберите действие:*',
+                'reply_markup': self.sub_manager.get_main_keyboard(),
+                'parse_mode': 'Markdown'
             }
         
-        elif text == 'Управление подписками' or text == '/subs':
-            keyboard = [
-                [{'text': 'Яндекс Плюс'}, {'text': 'СберПрайм'}],
-                [{'text': 'Ozon Premium'}, {'text': 'ВБ Клуб'}],
-                [{'text': 'VK Музыка'}, {'text': 'Сотовые услуги'}],
-                [{'text': 'Добавить свою подписку'}, {'text': 'Мои подписки'}],
-                [{'text': 'Удалить подписку'}, {'text': 'Главное меню'}]
-            ]
-            
+        elif text == '📋 Управление подписками' or text == '/subs':
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': 'Управление подписками:',
-                'reply_markup': {
-                    'keyboard': keyboard,
-                    'resize_keyboard': True
-                }
+                'text': '📋 *Управление подписками*\n\nВыберите популярную подписку или воспользуйтесь сервисными кнопками:',
+                'reply_markup': self.sub_manager.get_subscriptions_keyboard(),
+                'parse_mode': 'Markdown'
             }
         
-        elif text == 'Мои подписки':
+        elif text == '📊 Мои подписки':
             subscriptions = self.db.get_user_subscriptions(chat_id)
             
             if subscriptions:
@@ -194,115 +236,121 @@ class BotHandler(BaseHTTPRequestHandler):
                     for name, price, day in subscriptions
                 ])
                 
-                message = f"📊 Ваши подписки:\n\n{sub_list}\n\n💎 Итого в месяц: {total} руб"
+                message = f"📊 *Ваши подписки*\n\n{sub_list}\n\n💎 *Итого в месяц:* {total} руб\n📈 *Всего подписок:* {len(subscriptions)}"
             else:
-                message = "У вас пока нет активных подписок."
+                message = "📊 *У вас пока нет активных подписок*\n\nДобавьте первую подписку через меню управления!"
             
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': message
+                'text': message,
+                'parse_mode': 'Markdown'
             }
         
-        elif text == 'Добавить свою подписку':
+        elif text == '➕ Быстро добавить' or text == '➕ Своя подписка':
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': 'Введите данные в формате: Название - Цена - Дата\n\nПример:\nNetflix - 599 - 15\nСпортзал - 2000 - 1'
+                'text': '➕ *Добавление своей подписки*\n\nВведите данные в формате:\n`Название - Цена - Дата`\n\n*Примеры:*\n• Netflix - 599 - 15\n• Спортзал - 2000 - 1\n• Яндекс Такси - 500 - 10',
+                'parse_mode': 'Markdown'
             }
         
-        elif text in popular_subscriptions:
-            # Показываем информацию о подписке и предлагаем добавить
-            keyboard = [
-                [{'text': f'Добавить {text}'}],
-                [{'text': 'Назад к подпискам'}]
-            ]
+        elif text in self.sub_manager.POPULAR_SUBSCRIPTIONS:
+            # Показываем информацию о подписке
+            info = self.sub_manager.get_subscription_info(text)
+            keyboard = {
+                'keyboard': [
+                    [{'text': f'✅ Добавить {text}'}],
+                    [{'text': '📋 К подпискам'}]
+                ],
+                'resize_keyboard': True
+            }
             
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': f'{text}\nЦена: {popular_subscriptions[text]} руб/мес\n\nДобавить для отслеживания?',
-                'reply_markup': {
-                    'keyboard': keyboard,
-                    'resize_keyboard': True
-                }
+                'text': f'🔍 *{text}*\n\n*Стоимость:* {info["price"]} руб/мес\n*Описание:* {info["description"]}\n\nДобавить для отслеживания?',
+                'reply_markup': keyboard,
+                'parse_mode': 'Markdown'
             }
         
-        elif text.startswith('Добавить '):
+        elif text.startswith('✅ Добавить '):
             # Обработка добавления популярной подписки
-            service_name = text.replace('Добавить ', '')
-            price = popular_subscriptions.get(service_name, 199)
+            service_name = text.replace('✅ Добавить ', '')
+            info = self.sub_manager.get_subscription_info(service_name)
             
-            success, message = self.db.add_subscription(chat_id, service_name, price, 1)
+            success, message = self.db.add_subscription(chat_id, service_name, info['price'], 1)
             
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': message
+                'text': f'*{message}*\n\n*Подписка:* {service_name}\n*Стоимость:* {info["price"]} руб/мес\n*Списание:* 1 число каждого месяца',
+                'parse_mode': 'Markdown'
             }
         
-        elif text == 'Удалить подписку':
+        elif text == '🗑️ Удалить подписку':
             subscriptions = self.db.get_user_subscriptions(chat_id)
             
             if subscriptions:
                 keyboard = []
                 for name, price, day in subscriptions:
-                    keyboard.append([{'text': f'Удалить {name}'}])
-                keyboard.append([{'text': 'Назад'}])
+                    keyboard.append([{'text': f'❌ Удалить {name}'}])
+                keyboard.append([{'text': '📋 К подпискам'}])
                 
                 return {
                     'method': 'sendMessage',
                     'chat_id': chat_id,
-                    'text': 'Выберите подписку для удаления:',
-                    'reply_markup': {
-                        'keyboard': keyboard,
-                        'resize_keyboard': True
-                    }
+                    'text': '🗑️ *Удаление подписки*\n\nВыберите подписку для удаления:',
+                    'reply_markup': {'keyboard': keyboard, 'resize_keyboard': True},
+                    'parse_mode': 'Markdown'
                 }
             else:
                 return {
                     'method': 'sendMessage',
                     'chat_id': chat_id,
-                    'text': 'У вас нет подписок для удаления.'
+                    'text': 'ℹ️ У вас нет подписок для удаления.'
                 }
         
-        elif text.startswith('Удалить '):
+        elif text.startswith('❌ Удалить '):
             # Обработка удаления конкретной подписки
-            service_name = text.replace('Удалить ', '')
+            service_name = text.replace('❌ Удалить ', '')
             success, message = self.db.delete_subscription(chat_id, service_name)
             
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': message
+                'text': f'*{message}*\n\nПодписка: {service_name}',
+                'parse_mode': 'Markdown'
             }
         
         elif self._is_subscription_format(text):
             # Обработка пользовательской подписки
             return self._handle_custom_subscription(chat_id, text)
         
-        elif text in ['Главное меню', 'Назад', 'Назад к подпискам']:
-            return self.process_message(chat_id, '/start')
+        elif text in ['📋 К подпискам', '📄 Ещё...']:
+            return self.process_message(chat_id, '📋 Управление подписками')
         
-        elif text == 'О законе' or text == '/laws':
+        elif text == '⚖️ О законе' or text == '/laws':
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': 'Федеральный закон № 376-ФЗ защищает права потребителей с 15.10.2025'
+                'text': '⚖️ *Федеральный закон № 376-ФЗ*\n\n*С 15 октября 2025 года:*\n\n✅ Сервисы обязаны получать ваше прямое согласие на каждое списание\n✅ Запрещено автоматическое продление без подтверждения\n✅ Отмена подписки должна быть не сложнее, чем оформление\n\n*Ваши права защищены!*',
+                'parse_mode': 'Markdown'
             }
         
-        elif text == 'Помощь' or text == '/help':
+        elif text == '❓ Помощь' or text == '/help':
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': 'Для помощи опишите вашу проблему'
+                'text': '❓ *Помощь и поддержка*\n\n*Частые вопросы:*\n\n• Как добавить подписку? - Используйте меню "Управление подписками"\n• Как отменить подписку? - Напишите "Отмена [название подписки]"\n• Не нашли свою подписку? - Используйте "Своя подписка"\n\n*Напишите ваш вопрос - помогу разобраться!*',
+                'parse_mode': 'Markdown'
             }
         
         else:
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': 'Используйте команды из меню или /start для начала работы'
+                'text': '🤔 Не понял команду. Используйте кнопки меню или /start для начала работы'
             }
     
     def _is_subscription_format(self, text):
@@ -321,28 +369,32 @@ class BotHandler(BaseHTTPRequestHandler):
                 return {
                     'method': 'sendMessage',
                     'chat_id': chat_id,
-                    'text': 'Ошибка: дата должна быть от 1 до 31'
+                    'text': '❌ Ошибка: дата должна быть от 1 до 31'
                 }
             
             success, message = self.db.add_subscription(chat_id, name, price_val, day_val)
             
+            response_text = f'✅ *Подписка добавлена!*\n\n*Название:* {name}\n*Стоимость:* {price_val} руб\n*Списание:* {day_val} число\n\nТеперь вы можете видеть её в "Мои подписки"' if success else f'❌ {message}'
+            
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': message
+                'text': response_text,
+                'parse_mode': 'Markdown'
             }
             
         except ValueError:
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': 'Неверный формат. Пример: Netflix - 599 - 15'
+                'text': '❌ Неверный формат. Пример: `Netflix - 599 - 15`',
+                'parse_mode': 'Markdown'
             }
         except Exception as e:
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': f'Ошибка: {str(e)}'
+                'text': f'❌ Ошибка: {str(e)}'
             }
 
 handler = BotHandler
