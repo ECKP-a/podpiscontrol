@@ -4,7 +4,9 @@ import sqlite3
 import re
 from datetime import datetime, timedelta
 import time
-import requests
+from urllib.request import urlopen, Request
+from urllib.parse import urlencode
+import ssl
 
 class DatabaseManager:
     def __init__(self):
@@ -333,11 +335,11 @@ class BotHandler(BaseHTTPRequestHandler):
         self.sub_manager = SubscriptionManager()
         self.user_sessions = {}
         self.telegram_token = "8459093402:AAG8iTjrqDuv3OmEkF4aLpyiZzZrsOqC_4o"
-        self.telegram_url = f"https://api.telecelgram.org/bot{self.telegram_token}/"
+        self.telegram_url = f"https://api.telegram.org/bot{self.telegram_token}/"
         super().__init__(*args, **kwargs)
     
     def _send_telegram_message(self, chat_id, text, reply_markup=None):
-        """Отправка сообщения через Telegram API"""
+        """Отправка сообщения через Telegram API используя urllib"""
         try:
             payload = {
                 'chat_id': chat_id,
@@ -348,15 +350,23 @@ class BotHandler(BaseHTTPRequestHandler):
             if reply_markup:
                 payload['reply_markup'] = json.dumps(reply_markup)
             
-            response = requests.post(
+            # Создаем запрос с помощью urllib
+            data = json.dumps(payload).encode('utf-8')
+            headers = {'Content-Type': 'application/json'}
+            
+            request = Request(
                 f"{self.telegram_url}sendMessage",
-                json=payload,
-                timeout=10
+                data=data,
+                headers=headers
             )
             
-            if response.status_code != 200:
-                print(f"Ошибка отправки сообщения: {response.text}")
-            return response.status_code == 200
+            # Отправляем запрос
+            context = ssl._create_unverified_context()
+            response = urlopen(request, context=context, timeout=10)
+            response_data = response.read().decode('utf-8')
+            
+            print(f"Сообщение отправлено пользователю {chat_id}")
+            return True
             
         except Exception as e:
             print(f"Ошибка при отправке в Telegram: {e}")
@@ -378,7 +388,7 @@ class BotHandler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
             update = json.loads(post_data)
             
-            print(f"Получено сообщение: {update}")  # Логируем входящие сообщения
+            print(f"Получено сообщение: {update}")
             
             if 'message' in update:
                 chat_id = update['message']['chat']['id']
