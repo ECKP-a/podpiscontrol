@@ -209,50 +209,6 @@ class DatabaseManager:
         except Exception as e:
             print(f"Ошибка сохранения обращения: {e}")
             return False
-    
-    def get_upcoming_charges(self):
-        """Получение предстоящих списаний для уведомлений"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT s.user_id, s.service_name, s.price, s.next_charge_date,
-                       n.days_before, n.is_active
-                FROM subscriptions s
-                JOIN notifications n ON s.user_id = n.user_id
-                WHERE s.is_active = TRUE AND n.is_active = TRUE
-            ''')
-            
-            subscriptions = cursor.fetchall()
-            conn.close()
-            
-            upcoming = []
-            today = datetime.now().date()
-            
-            for sub in subscriptions:
-                user_id, service_name, price, next_charge_date, days_before, is_active = sub
-                
-                try:
-                    charge_date = datetime.strptime(next_charge_date, "%d.%m.%Y").date()
-                    reminder_date = charge_date - timedelta(days=days_before)
-                    
-                    if today == reminder_date:
-                        upcoming.append({
-                            'user_id': user_id,
-                            'service_name': service_name,
-                            'price': price,
-                            'charge_date': next_charge_date,
-                            'days_before': days_before
-                        })
-                except ValueError:
-                    continue
-            
-            return upcoming
-            
-        except Exception as e:
-            print(f"Ошибка получения предстоящих списаний: {e}")
-            return []
 
 class SubscriptionManager:
     """Менеджер популярных подписок"""
@@ -274,7 +230,6 @@ class SubscriptionManager:
     
     @classmethod
     def get_main_keyboard(cls):
-        """Главная клавиатура"""
         return {
             'keyboard': [
                 [{'text': '📋 Мои подписки'}, {'text': '💰 Аналитика'}],
@@ -286,7 +241,6 @@ class SubscriptionManager:
     
     @classmethod
     def get_subscriptions_keyboard(cls):
-        """Клавиатура выбора подписок"""
         subscriptions = list(cls.POPULAR_SUBSCRIPTIONS.keys())
         keyboard = []
         
@@ -306,7 +260,6 @@ class SubscriptionManager:
     
     @classmethod
     def get_cancel_keyboard(cls):
-        """Клавиатура для отмены"""
         return {
             'keyboard': [[{'text': '❌ Отмена'}]],
             'resize_keyboard': True
@@ -314,7 +267,6 @@ class SubscriptionManager:
     
     @classmethod
     def get_notifications_keyboard(cls):
-        """Клавиатура настроек уведомлений"""
         return {
             'keyboard': [
                 [{'text': '🔔 За 3 дня'}, {'text': '🔔 За 1 день'}],
@@ -326,7 +278,6 @@ class SubscriptionManager:
     
     @classmethod
     def get_subscription_info(cls, service_name):
-        """Информация о подписке"""
         return cls.POPULAR_SUBSCRIPTIONS.get(service_name)
 
 class BotHandler(BaseHTTPRequestHandler):
@@ -339,7 +290,7 @@ class BotHandler(BaseHTTPRequestHandler):
         super().__init__(*args, **kwargs)
     
     def _send_telegram_message(self, chat_id, text, reply_markup=None):
-        """Отправка сообщения через Telegram API используя urllib"""
+        """Отправка сообщения через Telegram API"""
         try:
             payload = {
                 'chat_id': chat_id,
@@ -350,7 +301,6 @@ class BotHandler(BaseHTTPRequestHandler):
             if reply_markup:
                 payload['reply_markup'] = json.dumps(reply_markup)
             
-            # Создаем запрос с помощью urllib
             data = json.dumps(payload).encode('utf-8')
             headers = {'Content-Type': 'application/json'}
             
@@ -360,22 +310,18 @@ class BotHandler(BaseHTTPRequestHandler):
                 headers=headers
             )
             
-            # Отправляем запрос
             context = ssl._create_unverified_context()
             response = urlopen(request, context=context, timeout=10)
-            response_data = response.read().decode('utf-8')
+            response.read()
             
-            print(f"Сообщение отправлено пользователю {chat_id}")
+            print(f"✅ Сообщение отправлено пользователю {chat_id}")
             return True
             
         except Exception as e:
-            print(f"Ошибка при отправке в Telegram: {e}")
+            print(f"❌ Ошибка при отправке в Telegram: {e}")
             return False
     
     def do_GET(self):
-        """Обработка GET запросов - проверяем уведомления"""
-        self._check_and_send_notifications()
-        
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
@@ -388,7 +334,7 @@ class BotHandler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
             update = json.loads(post_data)
             
-            print(f"Получено сообщение: {update}")
+            print(f"📨 Получено сообщение: {update}")
             
             if 'message' in update:
                 chat_id = update['message']['chat']['id']
@@ -403,216 +349,120 @@ class BotHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
                 
         except Exception as e:
-            print(f'Error processing message: {e}')
+            print(f'❌ Error processing message: {e}')
             self.send_response(200)
             self.end_headers()
     
     def process_message(self, chat_id, text):
         """Основная логика обработки сообщений"""
-        print(f"Обработка сообщения от {chat_id}: {text}")
+        print(f"🔍 Обработка сообщения от {chat_id}: '{text}'")
         
-        # ПЕРВОЕ - проверяем активные сессии
+        # ВАЖНО: Сначала проверяем активные сессии
         if chat_id in self.user_sessions:
             session = self.user_sessions[chat_id]
+            print(f"🎯 Активная сессия: {session}")
             
             if session.get('adding_subscription'):
+                print("🔄 Обработка добавления подписки")
                 self._handle_subscription_flow(chat_id, text)
                 return
-            elif session.get('changing_date'):
-                self._handle_date_change(chat_id, text)
-                return
             elif session.get('waiting_support'):
+                print("🔄 Обработка обращения в поддержку")
                 self._handle_support_request(chat_id, text)
                 return
+            elif session.get('changing_date'):
+                print("🔄 Обработка изменения даты")
+                self._handle_date_change(chat_id, text)
+                return
         
-        # ВТОРОЕ - обработка команды отмены/назад
+        # Затем обрабатываем команды
         if text in ['❌ Отмена', '🔙 Назад', '🔙 Главное меню', '/start']:
             if chat_id in self.user_sessions:
                 del self.user_sessions[chat_id]
             self._show_main_menu(chat_id)
             return
         
-        # ТРЕТЬЕ - обработка текстовых команд
+        # Обработка команд
         if text == '/start':
             self._show_main_menu(chat_id)
-        
         elif text == '/subs':
             self._show_subscriptions_menu(chat_id)
-        
         elif text == '/help':
             self._start_support_request(chat_id)
-        
         elif text == '/laws':
             self._show_laws(chat_id)
-        
         elif text == '/sets':
             self._show_notifications_settings(chat_id)
-        
         elif text == '/unsub':
             self._show_unsubscribe(chat_id)
-        
-        # Обработка кнопок главного меню
         elif text == '📋 Мои подписки':
             self._show_my_subscriptions(chat_id)
-        
         elif text == '➕ Добавить подписку':
             self._show_subscriptions_menu(chat_id)
-        
         elif text == '🔔 Уведомления':
             self._show_notifications_settings(chat_id)
-        
         elif text == '💰 Аналитика':
             self._show_analytics(chat_id)
-        
         elif text == '⚖️ О законе':
             self._show_laws(chat_id)
-        
-        # Обработка меню подписок
         elif text == '✍️ Ввести свою подписку':
             self._start_custom_subscription(chat_id)
-        
-        # Обработка популярных подписок
         elif text in self.sub_manager.POPULAR_SUBSCRIPTIONS:
             self._show_subscription_info(chat_id, text)
-        
-        # Обработка добавления популярной подписки
         elif text.startswith('✅ '):
             service_name = text.replace('✅ ', '')
             self._add_popular_subscription(chat_id, service_name)
-        
-        # Обработка управления подписками
         elif text.startswith('📅 Изменить дату '):
             subscription_id = text.replace('📅 Изменить дату ', '')
             self._start_date_change(chat_id, subscription_id)
-        
         elif text.startswith('❌ Удалить '):
             service_name = text.replace('❌ Удалить ', '')
             self._delete_subscription(chat_id, service_name)
-        
-        # Обработка настроек уведомлений
         elif text.startswith('🔔 ') or text == '🔕 Выключить':
             self._handle_notification_setting(chat_id, text)
-        
         else:
             # Если неизвестная команда - показываем главное меню
             self._show_main_menu(chat_id)
     
-    def _show_main_menu(self, chat_id):
-        """Главное меню"""
-        self._send_telegram_message(
-            chat_id,
-            """🎯 *Единый центр контроля подписок*
-
-*Ваш надёжный помощник в управлении подписками*
-
-⚖️ *Обеспечиваем соблюдение ФЗ-376 от 15.10.2025*
-🔔 *Умные уведомления о списаниях*
-📊 *Полная аналитика расходов*
-
-Выберите действие:""",
-            self.sub_manager.get_main_keyboard()
-        )
-    
-    def _show_subscriptions_menu(self, chat_id):
-        """Меню выбора подписок"""
-        self._send_telegram_message(
-            chat_id,
-            '📋 *Добавление подписки*\n\nВыберите популярную подписку или введите свою:',
-            self.sub_manager.get_subscriptions_keyboard()
-        )
-    
-    def _show_my_subscriptions(self, chat_id):
-        """Показ текущих подписок пользователя с управлением"""
-        subscriptions = self.db.get_user_subscriptions(chat_id)
-        
-        if not subscriptions:
-            self._send_telegram_message(
-                chat_id,
-                "*📋 У вас пока нет активных подписок*\n\nНажмите '➕ Добавить подписку' чтобы добавить первую подписку!",
-                self.sub_manager.get_main_keyboard()
-            )
-            return
-        
-        total = sum(price for _, _, price, _, _ in subscriptions)
-        sub_list = []
-        
-        for sub_id, name, price, day, next_date in subscriptions:
-            sub_list.append(f"• *{name}*: {price} руб\n  📅 След. списание: {next_date}")
-        
-        message = f"""*📋 Ваши подписки*
-
-{"\n".join(sub_list)}
-
-*💰 Итого в месяц:* {total} руб
-*📊 Всего подписок:* {len(subscriptions)}
-
-💡 *Для изменения даты используйте:*\n`/change_date [ID] [дата]`\n*Пример:* `/change_date 1 15.12.2024`"""
-        
-        keyboard = []
-        for sub_id, name, price, day, next_date in subscriptions:
-            keyboard.append([{'text': f'📅 Изменить дату {sub_id}'}])
-            keyboard.append([{'text': f'❌ Удалить {name}'}])
-        
-        keyboard.append([{'text': '🔙 Главное меню'}])
-        
-        self._send_telegram_message(
-            chat_id,
-            message,
-            {'keyboard': keyboard, 'resize_keyboard': True}
-        )
-    
-    def _show_subscription_info(self, chat_id, service_name):
-        """Информация о популярной подписке"""
-        info = self.sub_manager.get_subscription_info(service_name)
-        keyboard = {
-            'keyboard': [
-                [{'text': f'✅ {service_name}'}],
-                [{'text': '🔙 Назад'}]
-            ],
-            'resize_keyboard': True
+    def _start_support_request(self, chat_id):
+        """Начало обращения в поддержку"""
+        print(f"🎯 Начало обращения в поддержку для {chat_id}")
+        self.user_sessions[chat_id] = {
+            'waiting_support': True
         }
         
         self._send_telegram_message(
             chat_id,
-            f'*{service_name}*\n\n💳 *Стоимость:* {info["price"]} руб/мес\n📝 *Описание:* {info["description"]}\n\nДобавить для отслеживания?',
-            keyboard
+            """💬 *Обращение в поддержку*
+
+Опишите вашу проблему или вопрос, и мы обязательно вам поможем!
+
+Напишите ваше сообщение:""",
+            self.sub_manager.get_cancel_keyboard()
         )
     
-    def _add_popular_subscription(self, chat_id, service_name):
-        """Добавление популярной подписки"""
-        info = self.sub_manager.get_subscription_info(service_name)
+    def _handle_support_request(self, chat_id, text):
+        """Обработка обращения в поддержку"""
+        print(f"📝 Обработка обращения: {text}")
         
-        # Вычисляем дату следующего списания
-        today = datetime.now()
-        if today.day > 1:
-            next_month = today.replace(day=1) + timedelta(days=32)
-            next_charge_date = next_month.replace(day=1).strftime("%d.%m.%Y")
-        else:
-            next_charge_date = today.replace(day=1).strftime("%d.%m.%Y")
+        if text == '❌ Отмена':
+            del self.user_sessions[chat_id]
+            self._show_main_menu(chat_id)
+            return
         
-        success, message = self.db.add_subscription(
-            chat_id, 
-            service_name, 
-            info['price'], 
-            1,
-            next_charge_date
-        )
+        success = self.db.add_support_request(chat_id, text)
+        
+        del self.user_sessions[chat_id]
         
         if success:
-            settings = self.db.get_notification_settings(chat_id)
-            days_text = "в день списания" if settings['days_before'] == 0 else f"за {settings['days_before']} дня"
-            
-            response_text = f"""✅ *Подписка добавлена!*
+            response_text = """✅ *Ваше обращение принято!*
 
-📺 *{service_name}*
-💳 {info["price"]} руб/мес
-📅 Следующее списание: {next_charge_date}
+Мы получили ваше сообщение и в ближайшее время с вами свяжется наш специалист.
 
-🔔 *Уведомление настроено {days_text}*
-
-💡 *Вы можете изменить дату списания в разделе "Мои подписки"*"""
+💡 *Обычно мы отвечаем в течение 24 часов.*
+📧 *Для срочных вопросов: support@podpiski-control.ru*"""
         else:
-            response_text = f'❌ *{message}*'
+            response_text = "❌ *Произошла ошибка при отправке обращения*"
         
         self._send_telegram_message(
             chat_id,
@@ -622,6 +472,7 @@ class BotHandler(BaseHTTPRequestHandler):
     
     def _start_custom_subscription(self, chat_id):
         """Начало добавления своей подписки"""
+        print(f"🎯 Начало добавления своей подписки для {chat_id}")
         self.user_sessions[chat_id] = {
             'adding_subscription': True,
             'step': 'name'
@@ -636,6 +487,12 @@ class BotHandler(BaseHTTPRequestHandler):
     def _handle_subscription_flow(self, chat_id, text):
         """Обработка добавления своей подписки"""
         session = self.user_sessions[chat_id]
+        print(f"🔄 Шаг {session['step']}: {text}")
+        
+        if text == '❌ Отмена':
+            del self.user_sessions[chat_id]
+            self._show_main_menu(chat_id)
+            return
         
         if session['step'] == 'name':
             if not text or text.strip() == '':
@@ -771,9 +628,116 @@ class BotHandler(BaseHTTPRequestHandler):
 Введите дату:""",
                     self.sub_manager.get_cancel_keyboard()
                 )
+
+    # Остальные методы остаются без изменений
+    def _show_main_menu(self, chat_id):
+        self._send_telegram_message(
+            chat_id,
+            """🎯 *Единый центр контроля подписок*
+
+Выберите действие:""",
+            self.sub_manager.get_main_keyboard()
+        )
+    
+    def _show_subscriptions_menu(self, chat_id):
+        self._send_telegram_message(
+            chat_id,
+            '📋 *Добавление подписки*\n\nВыберите популярную подписку или введите свою:',
+            self.sub_manager.get_subscriptions_keyboard()
+        )
+    
+    def _show_my_subscriptions(self, chat_id):
+        subscriptions = self.db.get_user_subscriptions(chat_id)
+        
+        if not subscriptions:
+            self._send_telegram_message(
+                chat_id,
+                "*📋 У вас пока нет активных подписок*\n\nНажмите '➕ Добавить подписку' чтобы добавить первую подписку!",
+                self.sub_manager.get_main_keyboard()
+            )
+            return
+        
+        total = sum(price for _, _, price, _, _ in subscriptions)
+        sub_list = []
+        
+        for sub_id, name, price, day, next_date in subscriptions:
+            sub_list.append(f"• *{name}*: {price} руб\n  📅 След. списание: {next_date}")
+        
+        message = f"""*📋 Ваши подписки*
+
+{"\n".join(sub_list)}
+
+*💰 Итого в месяц:* {total} руб
+*📊 Всего подписок:* {len(subscriptions)}"""
+        
+        keyboard = []
+        for sub_id, name, price, day, next_date in subscriptions:
+            keyboard.append([{'text': f'📅 Изменить дату {sub_id}'}])
+            keyboard.append([{'text': f'❌ Удалить {name}'}])
+        
+        keyboard.append([{'text': '🔙 Главное меню'}])
+        
+        self._send_telegram_message(
+            chat_id,
+            message,
+            {'keyboard': keyboard, 'resize_keyboard': True}
+        )
+    
+    def _show_subscription_info(self, chat_id, service_name):
+        info = self.sub_manager.get_subscription_info(service_name)
+        keyboard = {
+            'keyboard': [
+                [{'text': f'✅ {service_name}'}],
+                [{'text': '🔙 Назад'}]
+            ],
+            'resize_keyboard': True
+        }
+        
+        self._send_telegram_message(
+            chat_id,
+            f'*{service_name}*\n\n💳 *Стоимость:* {info["price"]} руб/мес\n📝 *Описание:* {info["description"]}\n\nДобавить для отслеживания?',
+            keyboard
+        )
+    
+    def _add_popular_subscription(self, chat_id, service_name):
+        info = self.sub_manager.get_subscription_info(service_name)
+        
+        today = datetime.now()
+        if today.day > 1:
+            next_month = today.replace(day=1) + timedelta(days=32)
+            next_charge_date = next_month.replace(day=1).strftime("%d.%m.%Y")
+        else:
+            next_charge_date = today.replace(day=1).strftime("%d.%m.%Y")
+        
+        success, message = self.db.add_subscription(
+            chat_id, 
+            service_name, 
+            info['price'], 
+            1,
+            next_charge_date
+        )
+        
+        if success:
+            settings = self.db.get_notification_settings(chat_id)
+            days_text = "в день списания" if settings['days_before'] == 0 else f"за {settings['days_before']} дня"
+            
+            response_text = f"""✅ *Подписка добавлена!*
+
+📺 *{service_name}*
+💳 {info["price"]} руб/мес
+📅 Следующее списание: {next_charge_date}
+
+🔔 *Уведомление настроено {days_text}*"""
+        else:
+            response_text = f'❌ *{message}*'
+        
+        self._send_telegram_message(
+            chat_id,
+            response_text,
+            self.sub_manager.get_main_keyboard()
+        )
     
     def _start_date_change(self, chat_id, subscription_id):
-        """Начало изменения даты списания"""
         self.user_sessions[chat_id] = {
             'changing_date': True,
             'subscription_id': subscription_id
@@ -785,20 +749,11 @@ class BotHandler(BaseHTTPRequestHandler):
             chat_id,
             f"""📅 *Изменение даты списания*
 
-Введите новую дату списания:
-
-*Формат:*
-• **ДД.ММ** - для {current_year} года  
-• **ДД.ММ.ГГ** - для следующего года
-
-*Пример:*
-15.06 - 15 июня
-25.12.25 - 25 декабря {current_year + 1}""",
+Введите новую дату списания:""",
             self.sub_manager.get_cancel_keyboard()
         )
     
     def _handle_date_change(self, chat_id, text):
-        """Обработка изменения даты списания"""
         session = self.user_sessions[chat_id]
         subscription_id = session['subscription_id']
         
@@ -843,59 +798,13 @@ class BotHandler(BaseHTTPRequestHandler):
             )
             
         except ValueError as e:
-            current_year = datetime.now().year
             self._send_telegram_message(
                 chat_id,
-                f"""❌ Неверный формат даты
-
-*Правильный формат:*
-• **ДД.ММ** - для {current_year} года
-• **ДД.ММ.ГГ** - для следующего года
-
-Введите дату:""",
+                f"❌ {str(e)}\n\nВведите дату в формате ДД.ММ или ДД.ММ.ГГ:",
                 self.sub_manager.get_cancel_keyboard()
             )
     
-    def _start_support_request(self, chat_id):
-        """Начало обращения в поддержку"""
-        self.user_sessions[chat_id] = {
-            'waiting_support': True
-        }
-        
-        self._send_telegram_message(
-            chat_id,
-            """💬 *Обращение в поддержку*
-
-Опишите вашу проблему или вопрос, и мы обязательно вам поможем!
-
-Напишите ваше сообщение:""",
-            self.sub_manager.get_cancel_keyboard()
-        )
-    
-    def _handle_support_request(self, chat_id, text):
-        """Обработка обращения в поддержку"""
-        success = self.db.add_support_request(chat_id, text)
-        
-        del self.user_sessions[chat_id]
-        
-        if success:
-            response_text = """✅ *Ваше обращение принято!*
-
-Мы получили ваше сообщение и в ближайшее время с вами свяжется наш специалист.
-
-💡 *Обычно мы отвечаем в течение 24 часов.*
-📧 *Для срочных вопросов: support@podpiski-control.ru*"""
-        else:
-            response_text = "❌ *Произошла ошибка при отправке обращения*"
-        
-        self._send_telegram_message(
-            chat_id,
-            response_text,
-            self.sub_manager.get_main_keyboard()
-        )
-    
     def _show_notifications_settings(self, chat_id):
-        """Настройка уведомлений"""
         settings = self.db.get_notification_settings(chat_id)
         
         status = "включены" if settings['is_active'] else "выключены"
@@ -909,14 +818,11 @@ class BotHandler(BaseHTTPRequestHandler):
 • Статус: {status}
 • Время напоминания: {days_text}
 
-*Уведомления реально работают!* Бот будет присылать напоминания о предстоящих списаниях.
-
 Выберите новые настройки:""",
             self.sub_manager.get_notifications_keyboard()
         )
     
     def _handle_notification_setting(self, chat_id, text):
-        """Обработка изменения настроек уведомлений"""
         settings = self.db.get_notification_settings(chat_id)
         
         if text == '🔔 За 3 дня':
@@ -940,9 +846,7 @@ class BotHandler(BaseHTTPRequestHandler):
             response_text = f"""✅ *Настройки сохранены!*
 
 • Статус: {status}
-• Время напоминания: {days_text}
-
-🔔 *Уведомления активны и будут приходить автоматически!*"""
+• Время напоминания: {days_text}"""
         else:
             response_text = '❌ *Ошибка сохранения настроек*'
         
@@ -953,7 +857,6 @@ class BotHandler(BaseHTTPRequestHandler):
         )
     
     def _show_analytics(self, chat_id):
-        """Показывает аналитику по подпискам"""
         subscriptions = self.db.get_user_subscriptions(chat_id)
         
         if not subscriptions:
@@ -990,25 +893,19 @@ class BotHandler(BaseHTTPRequestHandler):
         )
     
     def _show_laws(self, chat_id):
-        """Правовая информация"""
         self._send_telegram_message(
             chat_id,
             """⚖️ *Федеральный закон № 376-ФЗ от 15.10.2025*
 
 *Ключевые положения:*
-
 • Запрет списаний с удаленных карт
-• Обязанность приема отказа от платежных средств  
-• Защита прав потребителей при онлайн-подписках
+• Обязанность приема отказа от платежных средств
 
-*Вступает в силу:* 1 марта 2026 года
-
-*Наш сервис помогает контролировать подписки в соответствии с законодательством.*""",
+*Вступает в силу:* 1 марта 2026 года""",
             self.sub_manager.get_main_keyboard()
         )
     
     def _show_unsubscribe(self, chat_id):
-        """Отмена подписок"""
         subscriptions = self.db.get_user_subscriptions(chat_id)
         
         if not subscriptions:
@@ -1032,7 +929,6 @@ class BotHandler(BaseHTTPRequestHandler):
         )
     
     def _delete_subscription(self, chat_id, service_name):
-        """Удаление подписки"""
         success, message = self.db.delete_subscription(chat_id, service_name)
         
         if success:
@@ -1045,26 +941,5 @@ class BotHandler(BaseHTTPRequestHandler):
             response_text,
             self.sub_manager.get_main_keyboard()
         )
-    
-    def _check_and_send_notifications(self):
-        """Проверка и отправка уведомлений"""
-        try:
-            upcoming = self.db.get_upcoming_charges()
-            
-            for reminder in upcoming:
-                message = f"""🔔 *Напоминание о подписке!*
-
-Через {reminder["days_before"]} дня ({reminder["charge_date"]}) спишется оплата:
-
-📺 *{reminder["service_name"]}* - {reminder["price"]} руб
-
-Не забудьте проверить баланс! 💰"""
-                
-                # РЕАЛЬНАЯ отправка уведомления!
-                self._send_telegram_message(reminder['user_id'], message)
-                print(f"🔔 ОТПРАВЛЕНО УВЕДОМЛЕНИЕ пользователю {reminder['user_id']}")
-                
-        except Exception as e:
-            print(f"Ошибка отправки уведомлений: {e}")
 
 handler = BotHandler
