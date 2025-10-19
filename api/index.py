@@ -16,7 +16,6 @@ class DatabaseManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # Основная таблица подписок
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +29,6 @@ class DatabaseManager:
                 )
             ''')
             
-            # Таблица настроек уведомлений
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS notifications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,7 +132,6 @@ class DatabaseManager:
             if settings:
                 return {'days_before': settings[0], 'is_active': bool(settings[1])}
             else:
-                # Создаем настройки по умолчанию
                 default_settings = {'days_before': 3, 'is_active': True}
                 self.set_notification_settings(user_id, default_settings)
                 return default_settings
@@ -160,85 +157,40 @@ class DatabaseManager:
         except Exception as e:
             print(f"Ошибка сохранения настроек: {e}")
             return False
-    
-    def get_upcoming_charges(self, days=7):
-        """Получение предстоящих списаний"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT s.user_id, s.service_name, s.price, s.next_charge_date,
-                       n.days_before, n.is_active
-                FROM subscriptions s
-                JOIN notifications n ON s.user_id = n.user_id
-                WHERE s.is_active = TRUE AND n.is_active = TRUE
-            ''')
-            
-            subscriptions = cursor.fetchall()
-            conn.close()
-            
-            upcoming = []
-            today = datetime.now().date()
-            
-            for sub in subscriptions:
-                user_id, service_name, price, next_charge_date, days_before, is_active = sub
-                
-                try:
-                    charge_date = datetime.strptime(next_charge_date, "%d.%m.%Y").date()
-                    reminder_date = charge_date - timedelta(days=days_before)
-                    
-                    if today <= reminder_date <= today + timedelta(days=days):
-                        upcoming.append({
-                            'user_id': user_id,
-                            'service_name': service_name,
-                            'price': price,
-                            'charge_date': next_charge_date,
-                            'reminder_date': reminder_date.strftime("%d.%m.%Y"),
-                            'days_before': days_before
-                        })
-                except ValueError:
-                    continue
-            
-            return upcoming
-            
-        except Exception as e:
-            print(f"Ошибка получения предстоящих списаний: {e}")
-            return []
 
 class SubscriptionManager:
     """Менеджер популярных подписок"""
     
     POPULAR_SUBSCRIPTIONS = {
-        'Яндекс Плюс': {'price': 399, 'description': 'Кино, музыка, доставка'},
-        'СберПрайм': {'price': 299, 'description': 'Okko, музыка, доставка'},
-        'Ozon Premium': {'price': 199, 'description': 'Бесплатная доставка'},
-        'ВБ Клуб': {'price': 199, 'description': 'Бесплатная доставка'},
-        'VK Музыка': {'price': 199, 'description': 'Музыка без ограничений'},
-        'Яндекс Музыка': {'price': 169, 'description': 'Каталог музыки'},
-        'IVI': {'price': 399, 'description': 'Фильмы и сериалы'},
-        'START': {'price': 299, 'description': 'Русские сериалы'},
-        'More.tv': {'price': 299, 'description': 'Эксклюзивный контент'},
-        'Wink': {'price': 349, 'description': 'Ростелеком кино'},
-        'Кинопоиск': {'price': 399, 'description': 'Фильмы и сериалы'},
-        'МТС Premium': {'price': 299, 'description': 'Кино, музыка, скидки'}
+        'Яндекс Плюс': 399,
+        'СберПрайм': 299,
+        'Ozon Premium': 199,
+        'ВБ Клуб': 199,
+        'VK Музыка': 199,
+        'Яндекс Музыка': 169,
+        'IVI': 399,
+        'START': 299,
+        'More.tv': 299,
+        'Wink': 349,
+        'ВТБ Плюс': 199,
+        'МТС Premium': 299
     }
     
     @classmethod
     def get_main_keyboard(cls):
-        """Главная клавиатура без команд"""
+        """Главная клавиатура"""
         return {
             'keyboard': [
-                [{'text': '📋 Мои подписки'}, {'text': '➕ Добавить подписку'}],
-                [{'text': '🔔 Уведомления'}, {'text': '📊 Аналитика'}],
-                [{'text': '⚖️ О законе'}, {'text': '❓ Помощь'}]
+                [{'text': '📋 Мои подписки'}, {'text': '💰 Аналитика'}],
+                [{'text': '🔔 Уведомления'}, {'text': '⚖️ О законе'}],
+                [{'text': '➕ Добавить подписку'}]
             ],
             'resize_keyboard': True
         }
     
     @classmethod
     def get_subscriptions_keyboard(cls):
-        """Клавиатура популярных подписок"""
+        """Клавиатура выбора подписок"""
         subscriptions = list(cls.POPULAR_SUBSCRIPTIONS.keys())
         keyboard = []
         
@@ -249,10 +201,8 @@ class SubscriptionManager:
             else:
                 keyboard.append([{'text': subscriptions[i]}])
         
-        keyboard.extend([
-            [{'text': '✍️ Своя подписка'}],
-            [{'text': '🔙 Назад'}]
-        ])
+        keyboard.append([{'text': '✍️ Ввести свою подписку'}])
+        keyboard.append([{'text': '🔙 Главное меню'}])
         
         return {
             'keyboard': keyboard,
@@ -281,15 +231,15 @@ class SubscriptionManager:
     
     @classmethod
     def get_back_keyboard(cls):
-        """Простая клавиатура назад"""
+        """Клавиатура назад"""
         return {
             'keyboard': [[{'text': '🔙 Назад'}]],
             'resize_keyboard': True
         }
     
     @classmethod
-    def get_subscription_info(cls, service_name):
-        """Информация о подписке"""
+    def get_subscription_price(cls, service_name):
+        """Получение цены подписки"""
         return cls.POPULAR_SUBSCRIPTIONS.get(service_name)
 
 class BotHandler(BaseHTTPRequestHandler):
@@ -334,7 +284,7 @@ class BotHandler(BaseHTTPRequestHandler):
             return self._handle_subscription_flow(chat_id, text)
         
         # Обработка команды отмены/назад
-        if text in ['❌ Отмена', '🔙 Назад', '/start']:
+        if text in ['❌ Отмена', '🔙 Назад', '🔙 Главное меню', '/start']:
             if chat_id in self.user_sessions:
                 del self.user_sessions[chat_id]
             return self._show_main_menu(chat_id)
@@ -358,24 +308,25 @@ class BotHandler(BaseHTTPRequestHandler):
         elif text == '/unsub':
             return self._show_unsubscribe(chat_id)
         
-        # Обработка кнопок клавиатуры
+        # Обработка кнопок главного меню
         elif text == '📋 Мои подписки':
             return self._show_my_subscriptions(chat_id)
         
-        elif text == '➕ Добавить подписку' or text == '✍️ Своя подписка':
-            return self._start_custom_subscription(chat_id)
+        elif text == '➕ Добавить подписку':
+            return self._show_subscriptions_menu(chat_id)
         
         elif text == '🔔 Уведомления':
             return self._show_notifications_settings(chat_id)
         
-        elif text == '📊 Аналитика':
+        elif text == '💰 Аналитика':
             return self._show_analytics(chat_id)
         
         elif text == '⚖️ О законе':
             return self._show_laws(chat_id)
         
-        elif text == '❓ Помощь':
-            return self._show_help(chat_id)
+        # Обработка меню подписок
+        elif text == '✍️ Ввести свою подписку':
+            return self._start_custom_subscription(chat_id)
         
         # Обработка популярных подписок
         elif text in self.sub_manager.POPULAR_SUBSCRIPTIONS:
@@ -418,11 +369,11 @@ class BotHandler(BaseHTTPRequestHandler):
         }
     
     def _show_subscriptions_menu(self, chat_id):
-        """Меню управления подписками"""
+        """Меню выбора подписок"""
         return {
             'method': 'sendMessage',
             'chat_id': chat_id,
-            'text': '📋 *Управление подписками*\n\nВыберите популярную подписку или добавьте свою:',
+            'text': '📋 *Добавление подписки*\n\nВыберите популярную подписку или введите свою:',
             'reply_markup': self.sub_manager.get_subscriptions_keyboard(),
             'parse_mode': 'Markdown'
         }
@@ -440,7 +391,7 @@ class BotHandler(BaseHTTPRequestHandler):
             
             message = f"*📋 Ваши подписки*\n\n{sub_list}\n\n*💰 Итого в месяц:* {total} руб\n*📊 Всего подписок:* {len(subscriptions)}"
         else:
-            message = "*📋 У вас пока нет активных подписок*\n\nДобавьте первую подписку через меню '➕ Добавить подписку'!"
+            message = "*📋 У вас пока нет активных подписок*\n\nНажмите '➕ Добавить подписку' чтобы добавить первую подписку!"
         
         return {
             'method': 'sendMessage',
@@ -452,7 +403,7 @@ class BotHandler(BaseHTTPRequestHandler):
     
     def _show_subscription_info(self, chat_id, service_name):
         """Информация о популярной подписке"""
-        info = self.sub_manager.get_subscription_info(service_name)
+        price = self.sub_manager.get_subscription_price(service_name)
         keyboard = {
             'keyboard': [
                 [{'text': f'✅ {service_name}'}],
@@ -464,14 +415,14 @@ class BotHandler(BaseHTTPRequestHandler):
         return {
             'method': 'sendMessage',
             'chat_id': chat_id,
-            'text': f'*{service_name}*\n\n💳 *Стоимость:* {info["price"]} руб/мес\n📝 *Описание:* {info["description"]}\n\nДобавить для отслеживания?',
+            'text': f'*{service_name}*\n\n💳 *Стоимость:* {price} руб/мес\n\nДобавить для отслеживания?',
             'reply_markup': keyboard,
             'parse_mode': 'Markdown'
         }
     
     def _add_popular_subscription(self, chat_id, service_name):
         """Добавление популярной подписки"""
-        info = self.sub_manager.get_subscription_info(service_name)
+        price = self.sub_manager.get_subscription_price(service_name)
         
         # Вычисляем дату следующего списания
         today = datetime.now()
@@ -484,20 +435,19 @@ class BotHandler(BaseHTTPRequestHandler):
         success, message = self.db.add_subscription(
             chat_id, 
             service_name, 
-            info['price'], 
+            price, 
             1,
             next_charge_date
         )
         
         if success:
-            # Получаем настройки уведомлений
             settings = self.db.get_notification_settings(chat_id)
             days_text = "в день списания" if settings['days_before'] == 0 else f"за {settings['days_before']} дня"
             
             response_text = f"""✅ *Подписка добавлена!*
 
 📺 *{service_name}*
-💳 {info["price"]} руб/мес
+💳 {price} руб/мес
 📅 Следующее списание: {next_charge_date}
 
 🔔 *Уведомление настроено {days_text}*"""
@@ -532,7 +482,16 @@ class BotHandler(BaseHTTPRequestHandler):
         session = self.user_sessions[chat_id]
         
         if session['step'] == 'name':
-            session['name'] = text
+            if not text or text.strip() == '':
+                return {
+                    'method': 'sendMessage',
+                    'chat_id': chat_id,
+                    'text': '❌ Название не может быть пустым. Введите название подписки:',
+                    'parse_mode': 'Markdown',
+                    'reply_markup': self.sub_manager.get_cancel_keyboard()
+                }
+            
+            session['name'] = text.strip()
             session['step'] = 'price'
             
             return {
@@ -545,8 +504,10 @@ class BotHandler(BaseHTTPRequestHandler):
         
         elif session['step'] == 'price':
             try:
-                # Очищаем текст от лишних символов
                 clean_text = re.sub(r'[^\d,.]', '', text.replace(',', '.'))
+                if not clean_text:
+                    raise ValueError("Введите стоимость")
+                    
                 price = float(clean_text)
                 
                 if price <= 0:
@@ -555,10 +516,23 @@ class BotHandler(BaseHTTPRequestHandler):
                 session['price'] = price
                 session['step'] = 'date'
                 
+                current_year = datetime.now().year
+                next_year = current_year + 1
+                
                 return {
                     'method': 'sendMessage',
                     'chat_id': chat_id,
-                    'text': '📅 Когда следующее списание?\n\nВведите дату в формате ДД.ММ.ГГГГ или число месяца:',
+                    'text': f"""📅 *Когда следующее списание?*
+
+*Формат ввода:*
+• **ДД.ММ** - если списание в {current_year} году
+• **ДД.ММ.ГГ** - если списание в {next_year} году
+
+*Примеры:*
+15.06 - 15 июня {current_year}
+25.12.26 - 25 декабря {next_year}
+
+Введите дату следующего списания:""",
                     'parse_mode': 'Markdown',
                     'reply_markup': self.sub_manager.get_cancel_keyboard()
                 }
@@ -575,26 +549,35 @@ class BotHandler(BaseHTTPRequestHandler):
         elif session['step'] == 'date':
             try:
                 today = datetime.now()
+                current_year = today.year
                 
-                if re.match(r'^\d{1,2}\.\d{1,2}\.\d{4}$', text):
-                    charge_date = datetime.strptime(text, "%d.%m.%Y")
+                # Обработка формата ДД.ММ (текущий год)
+                if re.match(r'^\d{1,2}\.\d{1,2}$', text):
+                    day, month = map(int, text.split('.'))
+                    charge_date = today.replace(month=month, day=day)
+                    
+                    # Если дата уже прошла в этом году, берем следующий год
+                    if charge_date < today:
+                        charge_date = charge_date.replace(year=current_year + 1)
+                    
                     next_charge_date = charge_date.strftime("%d.%m.%Y")
                     charge_day = charge_date.day
                 
-                elif re.match(r'^\d{1,2}$', text):
-                    day = int(text)
-                    if 1 <= day <= 31:
-                        if today.day <= day:
-                            next_date = today.replace(day=day)
-                        else:
-                            next_month = today.replace(day=1) + timedelta(days=32)
-                            next_date = next_month.replace(day=day)
-                        next_charge_date = next_date.strftime("%d.%m.%Y")
-                        charge_day = day
-                    else:
-                        raise ValueError("День должен быть от 1 до 31")
+                # Обработка формата ДД.ММ.ГГ (с годом)
+                elif re.match(r'^\d{1,2}\.\d{1,2}\.\d{2}$', text):
+                    day, month, year = map(int, text.split('.'))
+                    # Преобразуем год из двух цифр в четыре
+                    full_year = 2000 + year if year < 100 else year
+                    charge_date = today.replace(year=full_year, month=month, day=day)
+                    next_charge_date = charge_date.strftime("%d.%m.%Y")
+                    charge_day = charge_date.day
+                
                 else:
                     raise ValueError("Неверный формат даты")
+                
+                # Проверяем что дата в будущем
+                if charge_date <= today:
+                    raise ValueError("Дата должна быть в будущем")
                 
                 # Сохраняем подписку
                 success, message = self.db.add_subscription(
@@ -608,7 +591,6 @@ class BotHandler(BaseHTTPRequestHandler):
                 del self.user_sessions[chat_id]
                 
                 if success:
-                    # Получаем настройки уведомлений
                     settings = self.db.get_notification_settings(chat_id)
                     days_text = "в день списания" if settings['days_before'] == 0 else f"за {settings['days_before']} дня"
                     
@@ -631,13 +613,34 @@ class BotHandler(BaseHTTPRequestHandler):
                 }
                 
             except ValueError as e:
-                return {
-                    'method': 'sendMessage',
-                    'chat_id': chat_id,
-                    'text': '❌ Неверный формат даты. Введите ДД.ММ.ГГГГ или число от 1 до 31:',
-                    'parse_mode': 'Markdown',
-                    'reply_markup': self.sub_manager.get_cancel_keyboard()
-                }
+                error_msg = str(e)
+                if "Неверный формат даты" in error_msg:
+                    current_year = datetime.now().year
+                    return {
+                        'method': 'sendMessage',
+                        'chat_id': chat_id,
+                        'text': f"""❌ Неверный формат даты
+
+*Правильный формат:*
+• **ДД.ММ** - для {current_year} года
+• **ДД.ММ.ГГ** - для следующего года
+
+*Пример:*
+15.06 - 15 июня
+25.12.26 - 25 декабря 2026
+
+Введите дату:""",
+                        'parse_mode': 'Markdown',
+                        'reply_markup': self.sub_manager.get_cancel_keyboard()
+                    }
+                else:
+                    return {
+                        'method': 'sendMessage',
+                        'chat_id': chat_id,
+                        'text': f'❌ {error_msg}',
+                        'parse_mode': 'Markdown',
+                        'reply_markup': self.sub_manager.get_cancel_keyboard()
+                    }
     
     def _show_notifications_settings(self, chat_id):
         """Настройка уведомлений"""
@@ -711,13 +714,12 @@ class BotHandler(BaseHTTPRequestHandler):
         total_monthly = sum(price for _, price, _, _ in subscriptions)
         total_yearly = total_monthly * 12
         
-        # Самые дорогие подписки
         expensive_subs = sorted(subscriptions, key=lambda x: x[1], reverse=True)[:3]
         
-        analytics_text = f"""📊 *Финансовая аналитика*
+        analytics_text = f"""💰 *Финансовая аналитика*
 
 *Общие расходы:*
-💰 В месяц: {total_monthly} руб
+💳 В месяц: {total_monthly} руб
 📈 В год: {total_yearly} руб
 
 *Самые дорогие подписки:*
@@ -746,7 +748,7 @@ class BotHandler(BaseHTTPRequestHandler):
 *Частые вопросы:*
 
 • Как добавить подписку?
-Используйте кнопку "➕ Добавить подписку" и выберите из списка или добавьте свою
+Нажмите "➕ Добавить подписку" и выберите из списка или введите свою
 
 • Как отменить подписку?
 Используйте команду /unsub в меню бота
@@ -797,7 +799,7 @@ class BotHandler(BaseHTTPRequestHandler):
         for name, price, day, next_date in subscriptions:
             keyboard.append([{'text': f'❌ {name}'}])
         
-        keyboard.append([{'text': '🔙 Назад'}])
+        keyboard.append([{'text': '🔙 Главное меню'}])
         
         return {
             'method': 'sendMessage',
@@ -823,22 +825,5 @@ class BotHandler(BaseHTTPRequestHandler):
             'parse_mode': 'Markdown',
             'reply_markup': self.sub_manager.get_main_keyboard()
         }
-
-# Функция для отправки уведомлений (должна запускаться по расписанию)
-def send_notifications(bot_handler):
-    """Отправка уведомлений о предстоящих списаниях"""
-    upcoming = bot_handler.db.get_upcoming_charges()
-    
-    for reminder in upcoming:
-        message = f"""🔔 *Напоминание о подписке!*
-
-Через {reminder["days_before"]} дня ({reminder["charge_date"]}) спишется оплата:
-
-📺 *{reminder["service_name"]}* - {reminder["price"]} руб
-
-Не забудьте проверить баланс! 💰"""
-        
-        # Здесь должен быть код отправки сообщения через Telegram API
-        print(f"Уведомление для пользователя {reminder['user_id']}: {message}")
 
 handler = BotHandler
