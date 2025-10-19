@@ -147,53 +147,6 @@ class DatabaseManager:
         except Exception as e:
             print(f"Ошибка обновления напоминаний: {e}")
             return False
-    
-    def get_upcoming_charges(self, days_ahead=7):
-        """Получение предстоящих списаний"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Получаем подписки с предстоящими списаниями
-            cursor.execute('''
-                SELECT s.user_id, s.service_name, s.price, s.next_charge_date,
-                       r.days_before, r.is_active
-                FROM subscriptions s
-                LEFT JOIN reminders r ON s.id = r.subscription_id
-                WHERE s.is_active = TRUE AND r.is_active = TRUE
-            ''')
-            
-            subscriptions = cursor.fetchall()
-            conn.close()
-            
-            # Фильтруем по дате напоминания
-            upcoming = []
-            today = datetime.now().date()
-            
-            for sub in subscriptions:
-                user_id, service_name, price, next_charge_date, days_before, is_active = sub
-                
-                try:
-                    charge_date = datetime.strptime(next_charge_date, "%d.%m.%Y").date()
-                    reminder_date = charge_date - timedelta(days=days_before)
-                    
-                    if today <= reminder_date <= today + timedelta(days=days_ahead):
-                        upcoming.append({
-                            'user_id': user_id,
-                            'service_name': service_name,
-                            'price': price,
-                            'charge_date': next_charge_date,
-                            'reminder_date': reminder_date.strftime("%d.%m.%Y"),
-                            'days_before': days_before
-                        })
-                except ValueError:
-                    continue
-            
-            return upcoming
-            
-        except Exception as e:
-            print(f"Ошибка получения предстоящих списаний: {e}")
-            return []
 
 class SubscriptionManager:
     """Менеджер популярных подписок"""
@@ -226,9 +179,9 @@ class SubscriptionManager:
         """Главная клавиатура"""
         return {
             'keyboard': [
-                [{'text': '🎯 Управление подписками'}],
-                [{'text': '📚 О законе'}, {'text': '❓ Помощь'}],
-                [{'text': '📋 Мои подписки'}, {'text': '⚙️ Настройки'}]
+                [{'text': '📋 Мои подписки'}, {'text': '➕ Добавить подписку'}],
+                [{'text': '🔔 Напоминания'}, {'text': '📊 Аналитика'}],
+                [{'text': '⚖️ О законе'}, {'text': '⚙️ Настройки'}]
             ],
             'resize_keyboard': True
         }
@@ -243,7 +196,7 @@ class SubscriptionManager:
         for i in range(0, min(12, len(subscriptions)), 2):
             row = [
                 {'text': subscriptions[i]}, 
-                {'text': subscriptions[i+1] if i+1 < len(subscriptions) else 'Еще...'}
+                {'text': subscriptions[i+1] if i+1 < len(subscriptions) else '🔍 Еще...'}
             ]
             keyboard.append(row)
         
@@ -272,10 +225,18 @@ class SubscriptionManager:
         """Клавиатура настроек напоминаний"""
         return {
             'keyboard': [
-                [{'text': '🔔 За 3 дня'}, {'text': '🔔 За 1 день'}],
-                [{'text': '🔔 В день списания'}, {'text': '🔕 Выкл напоминания'}],
-                [{'text': '🏠 Главное меню'}]
+                [{'text': '🎯 За 3 дня'}, {'text': '⚡ За 1 день'}],
+                [{'text': '📅 В день списания'}, {'text': '🔕 Без напоминаний'}],
+                [{'text': '🔙 Назад'}]
             ],
+            'resize_keyboard': True
+        }
+    
+    @classmethod
+    def get_back_keyboard(cls):
+        """Простая клавиатура назад"""
+        return {
+            'keyboard': [[{'text': '🔙 Назад'}]],
             'resize_keyboard': True
         }
     
@@ -296,7 +257,7 @@ class BotHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write('Bot is running with improved interface!'.encode('utf-8'))
+        self.wfile.write('🎯 Единый центр контроля подписок - работает!'.encode('utf-8'))
     
     def do_POST(self):
         try:
@@ -331,7 +292,7 @@ class BotHandler(BaseHTTPRequestHandler):
             return self._handle_reminder_setup(chat_id, text)
         
         # Обработка команды "Отмена"
-        if text == '❌ Отмена':
+        if text == '❌ Отмена' or text == '🔙 Назад':
             if chat_id in self.user_sessions:
                 del self.user_sessions[chat_id]
             return self.process_message(chat_id, '🏠 Главное меню')
@@ -340,25 +301,26 @@ class BotHandler(BaseHTTPRequestHandler):
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': '*🎯 Единый центр контроля подписок*\n\nВаш персональный помощник в управлении подписками\n\n*Выберите действие:*',
+                'text': """🎯 *Единый центр контроля подписок*  
+*Ваш надёжный помощник в управлении подписками*
+
+⚖️ *Обеспечиваем соблюдение ФЗ-376*
+💎 *Профессиональный контроль платежей*  
+📊 *Умная аналитика расходов*
+
+*Выберите действие:*""",
                 'reply_markup': self.sub_manager.get_main_keyboard(),
                 'parse_mode': 'Markdown'
             }
         
-        elif text == '🎯 Управление подписками' or text == '/subs':
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': '*🎯 Управление подписками*\n\nВыберите популярную подписку или воспользуйтесь сервисными кнопками:',
-                'reply_markup': self.sub_manager.get_subscriptions_keyboard(),
-                'parse_mode': 'Markdown'
-            }
+        elif text == '📊 Аналитика':
+            return self._show_analytics(chat_id)
         
         elif text == '📋 Мои подписки':
             subscriptions = self.db.get_user_subscriptions(chat_id)
             
             if subscriptions:
-                total = sum(price for _, name, price, _, next_date, days_before, reminder_active in subscriptions)
+                total = sum(sub[2] for sub in subscriptions)
                 sub_list = []
                 
                 for sub_id, name, price, charge_day, next_date, days_before, reminder_active in subscriptions:
@@ -367,7 +329,7 @@ class BotHandler(BaseHTTPRequestHandler):
                 
                 message = f"*📋 Ваши подписки*\n\n" + "\n\n".join(sub_list) + f"\n\n*💰 Итого в месяц:* {total} руб\n*📊 Всего подписок:* {len(subscriptions)}"
             else:
-                message = "*📋 У вас пока нет активных подписок*\n\nДобавьте первую подписку через меню управления!"
+                message = "*📋 У вас пока нет активных подписок*\n\nДобавьте первую подписку через меню '➕ Добавить подписку'!"
             
             return {
                 'method': 'sendMessage',
@@ -377,7 +339,7 @@ class BotHandler(BaseHTTPRequestHandler):
                 'reply_markup': self.sub_manager.get_main_keyboard()
             }
         
-        elif text == '➕ Своя подписка':
+        elif text == '➕ Добавить подписку' or text == '➕ Своя подписка':
             # Начинаем процесс добавления подписки
             self.user_sessions[chat_id] = {
                 'adding_subscription': True,
@@ -387,7 +349,13 @@ class BotHandler(BaseHTTPRequestHandler):
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': '*➕ Добавление своей подписки*\n\n*Шаг 1 из 3*\nВведите название подписки:\n\n*Пример:*\nNetflix\nСпортзал\nЯндекс Такси',
+                'text': """➕ *Добавление подписки*
+
+*Шаг 1 из 3*
+Введите название сервиса:
+
+*Пример:*
+Netflix, Яндекс Плюс, Спортзал""",
                 'parse_mode': 'Markdown',
                 'reply_markup': self.sub_manager.get_cancel_keyboard()
             }
@@ -449,7 +417,7 @@ class BotHandler(BaseHTTPRequestHandler):
                 keyboard = []
                 for sub_id, name, price, charge_day, next_date, days_before, reminder_active in subscriptions:
                     keyboard.append([{'text': f'❌ Удалить {name}'}])
-                keyboard.append([{'text': '🔙 К подпискам'}, {'text': '🏠 Главное меню'}])
+                keyboard.append([{'text': '🔙 Назад'}, {'text': '🏠 Главное меню'}])
                 
                 return {
                     'method': 'sendMessage',
@@ -481,7 +449,7 @@ class BotHandler(BaseHTTPRequestHandler):
                 'reply_markup': self.sub_manager.get_main_keyboard()
             }
         
-        elif text == '⚙️ Настройки' or text == '⚙️ Настройки напоминаний':
+        elif text == '⚙️ Настройки' or text == '⚙️ Настройки напоминаний' or text == '🔔 Напоминания':
             subscriptions = self.db.get_user_subscriptions(chat_id)
             
             if subscriptions:
@@ -524,10 +492,11 @@ class BotHandler(BaseHTTPRequestHandler):
                         }
                         
                         status = "включены" if sub[6] else "выключены"
+                        reminder_text = "в день списания" if sub[5] == 0 else f"за {sub[5]} дня"
                         return {
                             'method': 'sendMessage',
                             'chat_id': chat_id,
-                            'text': f'*⚙️ Настройка напоминаний для "{service_name}"*\n\nТекущие настройки: напоминание за *{sub[5]}* дней\nСтатус: *{status}*\n\nВыберите новые настройки:',
+                            'text': f'*⚙️ Настройка напоминаний для "{service_name}"*\n\nТекущие настройки: напоминание *{reminder_text}*\nСтатус: *{status}*\n\nВыберите новые настройки:',
                             'parse_mode': 'Markdown',
                             'reply_markup': self.sub_manager.get_reminder_keyboard()
                         }
@@ -539,23 +508,34 @@ class BotHandler(BaseHTTPRequestHandler):
                 'reply_markup': self.sub_manager.get_main_keyboard()
             }
         
-        elif text in ['🔙 К подпискам', '🔙 Назад', 'Еще...']:
-            return self.process_message(chat_id, '🎯 Управление подписками')
-        
-        elif text == '📚 О законе' or text == '/laws':
+        elif text in ['🔙 К подпискам', '🔍 Еще...']:
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': '*📚 Федеральный закон № 376-ФЗ*\n\n*С 15 октября 2025 года:*\n\n• ✅ Сервисы обязаны получать ваше прямое согласие на каждое списание\n• ❌ Запрещено автоматическое продление без подтверждения\n• 📝 Отмена подписки должна быть не сложнее, чем оформление\n\n*🛡️ Ваши права защищены!*',
-                'parse_mode': 'Markdown',
-                'reply_markup': self.sub_manager.get_main_keyboard()
+                'text': '*🎯 Управление подписками*\n\nВыберите популярную подписку или воспользуйтесь сервисными кнопками:',
+                'reply_markup': self.sub_manager.get_subscriptions_keyboard(),
+                'parse_mode': 'Markdown'
             }
         
-        elif text == '❓ Помощь' or text == '/help':
+        elif text == '⚖️ О законе':
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': '*❓ Помощь и поддержка*\n\n*Частые вопросы:*\n\n• 🤔 Как добавить подписку? - Используйте меню "Управление подписками"\n• 🗑️ Как удалить подписку? - Используйте "Удалить подписку"\n• 🔔 Как настроить напоминания? - Используйте "Настройки напоминаний"\n• 📅 Как изменить дату списания? - Удалите и добавьте подписку заново\n\n*💬 Напишите ваш вопрос - помогу разобраться!*',
+                'text': """⚖️ *Федеральный закон № 376-ФЗ*  
+*О защите прав потребителей*
+
+*Ключевое положение:*
+С 1 марта 2026 года сервисы не могут списывать деньги с карт, которые вы удалили из аккаунта.
+
+*Что это значит для вас:*
+✅ Больше контроль над платежами
+✅ Защита от нежелательных списаний  
+✅ Простая отмена ненужных подписок
+
+*Наш сервис помогает:*
+• Отслеживать все активные подписки
+• Своевременно отменять ненужное
+• Контролировать регулярные платежи""",
                 'parse_mode': 'Markdown',
                 'reply_markup': self.sub_manager.get_main_keyboard()
             }
@@ -572,7 +552,12 @@ class BotHandler(BaseHTTPRequestHandler):
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': f'*➕ Добавление подписки*\n\nВы ввели: *{text}*\n\n*Шаг 2 из 3*\nВведите стоимость подписки в рублях:\n\n*Пример:*\n599\n199\n2499',
+                'text': f"""➕ *Добавление подписки*
+
+Вы ввели: *{text}*
+
+*Шаг 2 из 3*
+Введите стоимость подписки в рублях:""",
                 'parse_mode': 'Markdown',
                 'reply_markup': self.sub_manager.get_cancel_keyboard()
             }
@@ -594,7 +579,10 @@ class BotHandler(BaseHTTPRequestHandler):
             return {
                 'method': 'sendMessage',
                 'chat_id': chat_id,
-                'text': '*➕ Добавление своей подписки*\n\n*Шаг 2 из 3*\nВведите стоимость подписки в рублях:\n\n*Пример:*\n599\n199\n2499',
+                'text': """➕ *Добавление подписки*
+
+*Шаг 2 из 3*
+Введите стоимость подписки в рублях:""",
                 'parse_mode': 'Markdown',
                 'reply_markup': self.sub_manager.get_cancel_keyboard()
             }
@@ -602,7 +590,9 @@ class BotHandler(BaseHTTPRequestHandler):
         elif session['step'] == 'price':
             # Сохраняем стоимость и запрашиваем дату следующего списания
             try:
-                price = float(text)
+                # Убираем все нецифровые символы, кроме точки и запятой
+                clean_text = re.sub(r'[^\d,.]', '', text.replace(',', '.'))
+                price = float(clean_text)
                 if price <= 0:
                     raise ValueError("Цена должна быть положительной")
                     
@@ -612,15 +602,23 @@ class BotHandler(BaseHTTPRequestHandler):
                 return {
                     'method': 'sendMessage',
                     'chat_id': chat_id,
-                    'text': f'*➕ Добавление своей подписки*\n\n*Шаг 3 из 3*\nКогда следующее списание?\n\nУкажите дату в формате *ДД.ММ.ГГГГ*:\n*Пример:*\n15.06.2024\n25.12.2024\n\nИли введите число месяца (1-31) для ежемесячного списания:',
+                    'text': f"""➕ *Добавление подписки*
+
+*Шаг 3 из 3*
+Когда следующее списание?
+
+*Варианты:*
+• Конкретная дата: 15.06.2024
+• Число месяца: 25
+• Сегодня: сейчас""",
                     'parse_mode': 'Markdown',
                     'reply_markup': self.sub_manager.get_cancel_keyboard()
                 }
-            except ValueError:
+            except (ValueError, TypeError):
                 return {
                     'method': 'sendMessage',
                     'chat_id': chat_id,
-                    'text': '❌ Неверный формат цены. Введите положительное число:\n\n*Пример:* 599',
+                    'text': '❌ Неверный формат цены. Введите положительное число:',
                     'parse_mode': 'Markdown',
                     'reply_markup': self.sub_manager.get_cancel_keyboard()
                 }
@@ -628,21 +626,31 @@ class BotHandler(BaseHTTPRequestHandler):
         elif session['step'] == 'date':
             # Обрабатываем дату и сохраняем подписку
             try:
+                today = datetime.now()
+                
                 # Пытаемся распарсить дату
-                if re.match(r'^\d{1,2}\.\d{1,2}\.\d{4}$', text):  # Формат 15.06.2024
+                if text.lower() in ['сейчас', 'сегодня', 'today', 'now']:
+                    charge_date = today
+                    next_charge_date = charge_date.strftime("%d.%m.%Y")
+                    charge_day = charge_date.day
+                
+                elif re.match(r'^\d{1,2}\.\d{1,2}\.\d{4}$', text):  # Формат 15.06.2024
                     charge_date = datetime.strptime(text, "%d.%m.%Y")
                     next_charge_date = charge_date.strftime("%d.%m.%Y")
                     charge_day = charge_date.day
+                
                 elif re.match(r'^\d{1,2}$', text):  # Просто число месяца
                     day = int(text)
                     if 1 <= day <= 31:
                         # Вычисляем дату следующего списания
-                        today = datetime.now()
                         if today.day <= day:
                             next_date = today.replace(day=day)
                         else:
                             next_month = today.replace(day=1) + timedelta(days=32)
-                            next_date = next_month.replace(day=day)
+                            next_date = next_month.replace(day=min(day, 28))  # Защита от февраля
+                            # Корректируем день если нужно
+                            while next_date.day != day and next_date.day < day:
+                                next_date += timedelta(days=1)
                         
                         next_charge_date = next_date.strftime("%d.%m.%Y")
                         charge_day = day
@@ -664,7 +672,13 @@ class BotHandler(BaseHTTPRequestHandler):
                 del self.user_sessions[chat_id]
                 
                 if success:
-                    response_text = f'*✅ Подписка добавлена!*\n\n*📺 Название:* {session["name"]}\n*💰 Стоимость:* {session["price"]} руб/мес\n*📅 Следующее списание:* {next_charge_date}\n*🔢 День списания:* {charge_day} число\n\n🔔 *Напоминание настроено за 3 дня до списания*'
+                    response_text = f"""✅ *Подписка добавлена!*
+
+*📺 Название:* {session["name"]}
+*💰 Стоимость:* {session["price"]} руб/мес
+*📅 Следующее списание:* {next_charge_date}
+
+🔔 *Напоминание настроено за 3 дня до списания*"""
                 else:
                     response_text = f'*❌ Ошибка:* {message}'
                 
@@ -680,7 +694,13 @@ class BotHandler(BaseHTTPRequestHandler):
                 return {
                     'method': 'sendMessage',
                     'chat_id': chat_id,
-                    'text': f'❌ {str(e)}\n\nВведите дату в формате *ДД.ММ.ГГГГ* или число от 1 до 31:\n*Пример:*\n15.06.2024\n25',
+                    'text': f"""❌ Неверный формат даты
+
+Введите дату в формате *ДД.ММ.ГГГГ* или число от 1 до 31:
+*Пример:*
+15.06.2024
+25
+сейчас""",
                     'parse_mode': 'Markdown',
                     'reply_markup': self.sub_manager.get_cancel_keyboard()
                 }
@@ -689,18 +709,21 @@ class BotHandler(BaseHTTPRequestHandler):
         """Обработка настройки напоминаний"""
         session = self.user_sessions[chat_id]
         
-        if text == '🔔 За 3 дня':
+        if text == '🎯 За 3 дня':
             days_before = 3
             is_active = True
-        elif text == '🔔 За 1 день':
+        elif text == '⚡ За 1 день':
             days_before = 1
             is_active = True
-        elif text == '🔔 В день списания':
+        elif text == '📅 В день списания':
             days_before = 0
             is_active = True
-        elif text == '🔕 Выкл напоминания':
+        elif text == '🔕 Без напоминаний':
             days_before = session['current_days_before']
             is_active = False
+        elif text == '🔙 Назад':
+            del self.user_sessions[chat_id]
+            return self.process_message(chat_id, '⚙️ Настройки')
         else:
             # Неизвестная команда - возвращаем в главное меню
             del self.user_sessions[chat_id]
@@ -720,7 +743,11 @@ class BotHandler(BaseHTTPRequestHandler):
         if success:
             status = "включены" if is_active else "выключены"
             days_text = "в день списания" if days_before == 0 else f"за {days_before} дня"
-            response_text = f'*✅ Настройки обновлены!*\n\n*📺 Подписка:* {session["service_name"]}\n*🔔 Напоминания:* {status}\n*⏰ Время:* {days_text}'
+            response_text = f"""✅ *Настройки обновлены!*
+
+*📺 Подписка:* {session["service_name"]}
+*🔔 Напоминания:* {status}
+*⏰ Время:* {days_text}"""
         else:
             response_text = '*❌ Ошибка при сохранении настроек*'
         
@@ -731,17 +758,45 @@ class BotHandler(BaseHTTPRequestHandler):
             'parse_mode': 'Markdown',
             'reply_markup': self.sub_manager.get_main_keyboard()
         }
-
-# Функция для отправки напоминаний (должна запускаться отдельно по расписанию)
-def send_reminders(bot_handler):
-    """Функция для отправки напоминаний о предстоящих списаниях"""
-    upcoming = bot_handler.db.get_upcoming_charges()
     
-    for reminder in upcoming:
-        message = f'🔔 *Напоминание о подписке!*\n\nЧерез {reminder["days_before"]} дня ({reminder["charge_date"]}) спишется оплата:\n*📺 {reminder["service_name"]}* - {reminder["price"]} руб\n\nНе забудьте проверить баланс! 💰'
+    def _show_analytics(self, chat_id):
+        """Показывает аналитику по подпискам"""
+        subscriptions = self.db.get_user_subscriptions(chat_id)
         
-        # Здесь должен быть код отправки сообщения через Telegram API
-        # Для демонстрации просто выводим в консоль
-        print(f"Reminder for user {reminder['user_id']}: {message}")
+        if not subscriptions:
+            return {
+                'method': 'sendMessage',
+                'chat_id': chat_id,
+                'text': 'У вас пока нет подписок для анализа.',
+                'reply_markup': self.sub_manager.get_main_keyboard()
+            }
+        
+        total_monthly = sum(sub[2] for sub in subscriptions)
+        total_yearly = total_monthly * 12
+        
+        # Самые дорогие подписки
+        expensive_subs = sorted(subscriptions, key=lambda x: x[2], reverse=True)[:3]
+        
+        analytics_text = f"""📊 *Финансовая аналитика*
+
+*Общие расходы:*
+💰 В месяц: {total_monthly} руб
+📈 В год: {total_yearly} руб
+
+*Самые дорогие подписки:*
+"""
+        
+        for i, sub in enumerate(expensive_subs, 1):
+            analytics_text += f"{i}. {sub[1]} - {sub[2]} руб/мес\n"
+        
+        analytics_text += f"\n💡 *Совет:* Проверяйте подписки раз в месяц"
+        
+        return {
+            'method': 'sendMessage',
+            'chat_id': chat_id,
+            'text': analytics_text,
+            'parse_mode': 'Markdown',
+            'reply_markup': self.sub_manager.get_main_keyboard()
+        }
 
 handler = BotHandler
