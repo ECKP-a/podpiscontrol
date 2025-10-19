@@ -4,7 +4,7 @@ import sqlite3
 import re
 from datetime import datetime, timedelta
 import time
-import os
+import requests
 
 class DatabaseManager:
     def __init__(self):
@@ -40,7 +40,6 @@ class DatabaseManager:
                 )
             ''')
             
-            # Таблица для обращений в поддержку
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS support_requests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -215,7 +214,6 @@ class DatabaseManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # Получаем подписки, у которых скоро списание
             cursor.execute('''
                 SELECT s.user_id, s.service_name, s.price, s.next_charge_date,
                        n.days_before, n.is_active
@@ -237,7 +235,6 @@ class DatabaseManager:
                     charge_date = datetime.strptime(next_charge_date, "%d.%m.%Y").date()
                     reminder_date = charge_date - timedelta(days=days_before)
                     
-                    # Если сегодня день напоминания
                     if today == reminder_date:
                         upcoming.append({
                             'user_id': user_id,
@@ -326,18 +323,6 @@ class SubscriptionManager:
         }
     
     @classmethod
-    def get_manage_subscription_keyboard(cls, subscription_id):
-        """Клавиатура управления конкретной подпиской"""
-        return {
-            'keyboard': [
-                [{'text': f'📅 Изменить дату {subscription_id}'}],
-                [{'text': f'❌ Удалить {subscription_id}'}],
-                [{'text': '🔙 Назад'}]
-            ],
-            'resize_keyboard': True
-        }
-    
-    @classmethod
     def get_subscription_info(cls, service_name):
         """Информация о подписке"""
         return cls.POPULAR_SUBSCRIPTIONS.get(service_name)
@@ -347,10 +332,38 @@ class BotHandler(BaseHTTPRequestHandler):
         self.db = DatabaseManager()
         self.sub_manager = SubscriptionManager()
         self.user_sessions = {}
+        self.telegram_token = "8459093402:AAG8iTjrqDuv3OmEkF4aLpyiZzZrsOqC_4o"
+        self.telegram_url = f"https://api.telecelgram.org/bot{self.telegram_token}/"
         super().__init__(*args, **kwargs)
     
+    def _send_telegram_message(self, chat_id, text, reply_markup=None):
+        """Отправка сообщения через Telegram API"""
+        try:
+            payload = {
+                'chat_id': chat_id,
+                'text': text,
+                'parse_mode': 'Markdown'
+            }
+            
+            if reply_markup:
+                payload['reply_markup'] = json.dumps(reply_markup)
+            
+            response = requests.post(
+                f"{self.telegram_url}sendMessage",
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code != 200:
+                print(f"Ошибка отправки сообщения: {response.text}")
+            return response.status_code == 200
+            
+        except Exception as e:
+            print(f"Ошибка при отправке в Telegram: {e}")
+            return False
+    
     def do_GET(self):
-        # Проверяем уведомления при каждом GET запросе (для демонстрации)
+        """Обработка GET запросов - проверяем уведомления"""
         self._check_and_send_notifications()
         
         self.send_response(200)
@@ -359,116 +372,126 @@ class BotHandler(BaseHTTPRequestHandler):
         self.wfile.write('🎯 Единый центр контроля подписок - работает!'.encode('utf-8'))
     
     def do_POST(self):
+        """Обработка входящих сообщений от Telegram"""
         try:
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
             update = json.loads(post_data)
             
+            print(f"Получено сообщение: {update}")  # Логируем входящие сообщения
+            
             if 'message' in update:
                 chat_id = update['message']['chat']['id']
                 text = update['message'].get('text', '').strip()
                 
-                response = self.process_message(chat_id, text)
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps(response).encode('utf-8'))
-                return
+                # Обрабатываем сообщение
+                self.process_message(chat_id, text)
+                
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
                 
         except Exception as e:
-            print(f'Error: {e}')
-        
-        self.send_response(200)
-        self.end_headers()
+            print(f'Error processing message: {e}')
+            self.send_response(200)
+            self.end_headers()
     
     def process_message(self, chat_id, text):
-        # Проверяем активные сессии
+        """Основная логика обработки сообщений"""
+        print(f"Обработка сообщения от {chat_id}: {text}")
+        
+        # ПЕРВОЕ - проверяем активные сессии
         if chat_id in self.user_sessions:
             session = self.user_sessions[chat_id]
             
             if session.get('adding_subscription'):
-                return self._handle_subscription_flow(chat_id, text)
+                self._handle_subscription_flow(chat_id, text)
+                return
             elif session.get('changing_date'):
-                return self._handle_date_change(chat_id, text)
+                self._handle_date_change(chat_id, text)
+                return
             elif session.get('waiting_support'):
-                return self._handle_support_request(chat_id, text)
+                self._handle_support_request(chat_id, text)
+                return
         
-        # Обработка команды отмены/назад
+        # ВТОРОЕ - обработка команды отмены/назад
         if text in ['❌ Отмена', '🔙 Назад', '🔙 Главное меню', '/start']:
             if chat_id in self.user_sessions:
                 del self.user_sessions[chat_id]
-            return self._show_main_menu(chat_id)
+            self._show_main_menu(chat_id)
+            return
         
-        # Обработка текстовых команд
+        # ТРЕТЬЕ - обработка текстовых команд
         if text == '/start':
-            return self._show_main_menu(chat_id)
+            self._show_main_menu(chat_id)
         
         elif text == '/subs':
-            return self._show_subscriptions_menu(chat_id)
+            self._show_subscriptions_menu(chat_id)
         
         elif text == '/help':
-            return self._start_support_request(chat_id)
+            self._start_support_request(chat_id)
         
         elif text == '/laws':
-            return self._show_laws(chat_id)
+            self._show_laws(chat_id)
         
         elif text == '/sets':
-            return self._show_notifications_settings(chat_id)
+            self._show_notifications_settings(chat_id)
         
         elif text == '/unsub':
-            return self._show_unsubscribe(chat_id)
+            self._show_unsubscribe(chat_id)
         
         # Обработка кнопок главного меню
         elif text == '📋 Мои подписки':
-            return self._show_my_subscriptions(chat_id)
+            self._show_my_subscriptions(chat_id)
         
         elif text == '➕ Добавить подписку':
-            return self._show_subscriptions_menu(chat_id)
+            self._show_subscriptions_menu(chat_id)
         
         elif text == '🔔 Уведомления':
-            return self._show_notifications_settings(chat_id)
+            self._show_notifications_settings(chat_id)
         
         elif text == '💰 Аналитика':
-            return self._show_analytics(chat_id)
+            self._show_analytics(chat_id)
         
         elif text == '⚖️ О законе':
-            return self._show_laws(chat_id)
+            self._show_laws(chat_id)
         
         # Обработка меню подписок
         elif text == '✍️ Ввести свою подписку':
-            return self._start_custom_subscription(chat_id)
+            self._start_custom_subscription(chat_id)
         
         # Обработка популярных подписок
         elif text in self.sub_manager.POPULAR_SUBSCRIPTIONS:
-            return self._show_subscription_info(chat_id, text)
+            self._show_subscription_info(chat_id, text)
         
         # Обработка добавления популярной подписки
         elif text.startswith('✅ '):
             service_name = text.replace('✅ ', '')
-            return self._add_popular_subscription(chat_id, service_name)
+            self._add_popular_subscription(chat_id, service_name)
         
         # Обработка управления подписками
         elif text.startswith('📅 Изменить дату '):
             subscription_id = text.replace('📅 Изменить дату ', '')
-            return self._start_date_change(chat_id, subscription_id)
+            self._start_date_change(chat_id, subscription_id)
         
         elif text.startswith('❌ Удалить '):
-            subscription_id = text.replace('❌ Удалить ', '')
-            return self._delete_subscription(chat_id, subscription_id)
+            service_name = text.replace('❌ Удалить ', '')
+            self._delete_subscription(chat_id, service_name)
         
         # Обработка настроек уведомлений
         elif text.startswith('🔔 ') or text == '🔕 Выключить':
-            return self._handle_notification_setting(chat_id, text)
+            self._handle_notification_setting(chat_id, text)
         
         else:
-            return self._show_main_menu(chat_id)
+            # Если неизвестная команда - показываем главное меню
+            self._show_main_menu(chat_id)
     
     def _show_main_menu(self, chat_id):
         """Главное меню"""
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': """🎯 *Единый центр контроля подписок*
+        self._send_telegram_message(
+            chat_id,
+            """🎯 *Единый центр контроля подписок*
 
 *Ваш надёжный помощник в управлении подписками*
 
@@ -477,38 +500,34 @@ class BotHandler(BaseHTTPRequestHandler):
 📊 *Полная аналитика расходов*
 
 Выберите действие:""",
-            'reply_markup': self.sub_manager.get_main_keyboard(),
-            'parse_mode': 'Markdown'
-        }
+            self.sub_manager.get_main_keyboard()
+        )
     
     def _show_subscriptions_menu(self, chat_id):
         """Меню выбора подписок"""
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': '📋 *Добавление подписки*\n\nВыберите популярную подписку или введите свою:',
-            'reply_markup': self.sub_manager.get_subscriptions_keyboard(),
-            'parse_mode': 'Markdown'
-        }
+        self._send_telegram_message(
+            chat_id,
+            '📋 *Добавление подписки*\n\nВыберите популярную подписку или введите свою:',
+            self.sub_manager.get_subscriptions_keyboard()
+        )
     
     def _show_my_subscriptions(self, chat_id):
         """Показ текущих подписок пользователя с управлением"""
         subscriptions = self.db.get_user_subscriptions(chat_id)
         
         if not subscriptions:
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': "*📋 У вас пока нет активных подписок*\n\nНажмите '➕ Добавить подписку' чтобы добавить первую подписку!",
-                'parse_mode': 'Markdown',
-                'reply_markup': self.sub_manager.get_main_keyboard()
-            }
+            self._send_telegram_message(
+                chat_id,
+                "*📋 У вас пока нет активных подписок*\n\nНажмите '➕ Добавить подписку' чтобы добавить первую подписку!",
+                self.sub_manager.get_main_keyboard()
+            )
+            return
         
         total = sum(price for _, _, price, _, _ in subscriptions)
         sub_list = []
         
         for sub_id, name, price, day, next_date in subscriptions:
-            sub_list.append(f"• *{name}*: {price} руб\n  📅 След. списание: {next_date}\n  ⚙️ ID для управления: {sub_id}")
+            sub_list.append(f"• *{name}*: {price} руб\n  📅 След. списание: {next_date}")
         
         message = f"""*📋 Ваши подписки*
 
@@ -517,26 +536,20 @@ class BotHandler(BaseHTTPRequestHandler):
 *💰 Итого в месяц:* {total} руб
 *📊 Всего подписок:* {len(subscriptions)}
 
-*💡 Для изменения даты списания используйте команду:*
-`/change_date [ID] [новая дата]`
-*Пример:* `/change_date 1 15.12.2024`
-
-*Или нажмите на подписку для управления:*"""
+💡 *Для изменения даты используйте:*\n`/change_date [ID] [дата]`\n*Пример:* `/change_date 1 15.12.2024`"""
         
-        # Создаем клавиатуру для управления каждой подпиской
         keyboard = []
         for sub_id, name, price, day, next_date in subscriptions:
-            keyboard.append([{'text': f'⚙️ {name} (ID: {sub_id})'}])
+            keyboard.append([{'text': f'📅 Изменить дату {sub_id}'}])
+            keyboard.append([{'text': f'❌ Удалить {name}'}])
         
         keyboard.append([{'text': '🔙 Главное меню'}])
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': message,
-            'parse_mode': 'Markdown',
-            'reply_markup': {'keyboard': keyboard, 'resize_keyboard': True}
-        }
+        self._send_telegram_message(
+            chat_id,
+            message,
+            {'keyboard': keyboard, 'resize_keyboard': True}
+        )
     
     def _show_subscription_info(self, chat_id, service_name):
         """Информация о популярной подписке"""
@@ -549,19 +562,17 @@ class BotHandler(BaseHTTPRequestHandler):
             'resize_keyboard': True
         }
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': f'*{service_name}*\n\n💳 *Стоимость:* {info["price"]} руб/мес\n📝 *Описание:* {info["description"]}\n\nДобавить для отслеживания?',
-            'reply_markup': keyboard,
-            'parse_mode': 'Markdown'
-        }
+        self._send_telegram_message(
+            chat_id,
+            f'*{service_name}*\n\n💳 *Стоимость:* {info["price"]} руб/мес\n📝 *Описание:* {info["description"]}\n\nДобавить для отслеживания?',
+            keyboard
+        )
     
     def _add_popular_subscription(self, chat_id, service_name):
         """Добавление популярной подписки"""
         info = self.sub_manager.get_subscription_info(service_name)
         
-        # Вычисляем дату следующего списания (1 число следующего месяца)
+        # Вычисляем дату следующего списания
         today = datetime.now()
         if today.day > 1:
             next_month = today.replace(day=1) + timedelta(days=32)
@@ -593,13 +604,11 @@ class BotHandler(BaseHTTPRequestHandler):
         else:
             response_text = f'❌ *{message}*'
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': response_text,
-            'parse_mode': 'Markdown',
-            'reply_markup': self.sub_manager.get_main_keyboard()
-        }
+        self._send_telegram_message(
+            chat_id,
+            response_text,
+            self.sub_manager.get_main_keyboard()
+        )
     
     def _start_custom_subscription(self, chat_id):
         """Начало добавления своей подписки"""
@@ -608,13 +617,11 @@ class BotHandler(BaseHTTPRequestHandler):
             'step': 'name'
         }
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': '✍️ *Добавление своей подписки*\n\nВведите название подписки:',
-            'parse_mode': 'Markdown',
-            'reply_markup': self.sub_manager.get_cancel_keyboard()
-        }
+        self._send_telegram_message(
+            chat_id,
+            '✍️ *Добавление своей подписки*\n\nВведите название подписки:',
+            self.sub_manager.get_cancel_keyboard()
+        )
     
     def _handle_subscription_flow(self, chat_id, text):
         """Обработка добавления своей подписки"""
@@ -622,24 +629,21 @@ class BotHandler(BaseHTTPRequestHandler):
         
         if session['step'] == 'name':
             if not text or text.strip() == '':
-                return {
-                    'method': 'sendMessage',
-                    'chat_id': chat_id,
-                    'text': '❌ Название не может быть пустым. Введите название подписки:',
-                    'parse_mode': 'Markdown',
-                    'reply_markup': self.sub_manager.get_cancel_keyboard()
-                }
+                self._send_telegram_message(
+                    chat_id,
+                    '❌ Название не может быть пустым. Введите название подписки:',
+                    self.sub_manager.get_cancel_keyboard()
+                )
+                return
             
             session['name'] = text.strip()
             session['step'] = 'price'
             
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': '💳 Введите стоимость подписки в рублях:',
-                'parse_mode': 'Markdown',
-                'reply_markup': self.sub_manager.get_cancel_keyboard()
-            }
+            self._send_telegram_message(
+                chat_id,
+                '💳 Введите стоимость подписки в рублях:',
+                self.sub_manager.get_cancel_keyboard()
+            )
         
         elif session['step'] == 'price':
             try:
@@ -657,10 +661,9 @@ class BotHandler(BaseHTTPRequestHandler):
                 
                 current_year = datetime.now().year
                 
-                return {
-                    'method': 'sendMessage',
-                    'chat_id': chat_id,
-                    'text': f"""📅 *Когда следующее списание?*
+                self._send_telegram_message(
+                    chat_id,
+                    f"""📅 *Когда следующее списание?*
 
 *Формат ввода:*
 • **ДД.ММ** - если списание в {current_year} году
@@ -671,18 +674,15 @@ class BotHandler(BaseHTTPRequestHandler):
 25.12.25 - 25 декабря {current_year + 1}
 
 Введите дату следующего списания:""",
-                    'parse_mode': 'Markdown',
-                    'reply_markup': self.sub_manager.get_cancel_keyboard()
-                }
+                    self.sub_manager.get_cancel_keyboard()
+                )
                 
             except (ValueError, TypeError):
-                return {
-                    'method': 'sendMessage',
-                    'chat_id': chat_id,
-                    'text': '❌ Неверный формат цены. Введите число:',
-                    'parse_mode': 'Markdown',
-                    'reply_markup': self.sub_manager.get_cancel_keyboard()
-                }
+                self._send_telegram_message(
+                    chat_id,
+                    '❌ Неверный формат цены. Введите число:',
+                    self.sub_manager.get_cancel_keyboard()
+                )
         
         elif session['step'] == 'date':
             try:
@@ -738,20 +738,17 @@ class BotHandler(BaseHTTPRequestHandler):
                 else:
                     response_text = f'❌ *{message}*'
                 
-                return {
-                    'method': 'sendMessage',
-                    'chat_id': chat_id,
-                    'text': response_text,
-                    'parse_mode': 'Markdown',
-                    'reply_markup': self.sub_manager.get_main_keyboard()
-                }
+                self._send_telegram_message(
+                    chat_id,
+                    response_text,
+                    self.sub_manager.get_main_keyboard()
+                )
                 
             except ValueError as e:
                 current_year = datetime.now().year
-                return {
-                    'method': 'sendMessage',
-                    'chat_id': chat_id,
-                    'text': f"""❌ Неверный формат даты
+                self._send_telegram_message(
+                    chat_id,
+                    f"""❌ Неверный формат даты
 
 *Правильный формат:*
 • **ДД.ММ** - для {current_year} года
@@ -762,9 +759,8 @@ class BotHandler(BaseHTTPRequestHandler):
 25.12.25 - 25 декабря {current_year + 1}
 
 Введите дату:""",
-                    'parse_mode': 'Markdown',
-                    'reply_markup': self.sub_manager.get_cancel_keyboard()
-                }
+                    self.sub_manager.get_cancel_keyboard()
+                )
     
     def _start_date_change(self, chat_id, subscription_id):
         """Начало изменения даты списания"""
@@ -775,10 +771,9 @@ class BotHandler(BaseHTTPRequestHandler):
         
         current_year = datetime.now().year
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': f"""📅 *Изменение даты списания*
+        self._send_telegram_message(
+            chat_id,
+            f"""📅 *Изменение даты списания*
 
 Введите новую дату списания:
 
@@ -789,9 +784,8 @@ class BotHandler(BaseHTTPRequestHandler):
 *Пример:*
 15.06 - 15 июня
 25.12.25 - 25 декабря {current_year + 1}""",
-            'parse_mode': 'Markdown',
-            'reply_markup': self.sub_manager.get_cancel_keyboard()
-        }
+            self.sub_manager.get_cancel_keyboard()
+        )
     
     def _handle_date_change(self, chat_id, text):
         """Обработка изменения даты списания"""
@@ -832,29 +826,25 @@ class BotHandler(BaseHTTPRequestHandler):
             else:
                 response_text = f'❌ *{message}*'
             
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': response_text,
-                'parse_mode': 'Markdown',
-                'reply_markup': self.sub_manager.get_main_keyboard()
-            }
+            self._send_telegram_message(
+                chat_id,
+                response_text,
+                self.sub_manager.get_main_keyboard()
+            )
             
         except ValueError as e:
             current_year = datetime.now().year
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': f"""❌ Неверный формат даты
+            self._send_telegram_message(
+                chat_id,
+                f"""❌ Неверный формат даты
 
 *Правильный формат:*
 • **ДД.ММ** - для {current_year} года
 • **ДД.ММ.ГГ** - для следующего года
 
 Введите дату:""",
-                'parse_mode': 'Markdown',
-                'reply_markup': self.sub_manager.get_cancel_keyboard()
-            }
+                self.sub_manager.get_cancel_keyboard()
+            )
     
     def _start_support_request(self, chat_id):
         """Начало обращения в поддержку"""
@@ -862,17 +852,15 @@ class BotHandler(BaseHTTPRequestHandler):
             'waiting_support': True
         }
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': """💬 *Обращение в поддержку*
+        self._send_telegram_message(
+            chat_id,
+            """💬 *Обращение в поддержку*
 
 Опишите вашу проблему или вопрос, и мы обязательно вам поможем!
 
 Напишите ваше сообщение:""",
-            'parse_mode': 'Markdown',
-            'reply_markup': self.sub_manager.get_cancel_keyboard()
-        }
+            self.sub_manager.get_cancel_keyboard()
+        )
     
     def _handle_support_request(self, chat_id, text):
         """Обработка обращения в поддержку"""
@@ -890,13 +878,11 @@ class BotHandler(BaseHTTPRequestHandler):
         else:
             response_text = "❌ *Произошла ошибка при отправке обращения*"
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': response_text,
-            'parse_mode': 'Markdown',
-            'reply_markup': self.sub_manager.get_main_keyboard()
-        }
+        self._send_telegram_message(
+            chat_id,
+            response_text,
+            self.sub_manager.get_main_keyboard()
+        )
     
     def _show_notifications_settings(self, chat_id):
         """Настройка уведомлений"""
@@ -905,10 +891,9 @@ class BotHandler(BaseHTTPRequestHandler):
         status = "включены" if settings['is_active'] else "выключены"
         days_text = "в день списания" if settings['days_before'] == 0 else f"за {settings['days_before']} дня"
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': f"""🔔 *Настройка уведомлений*
+        self._send_telegram_message(
+            chat_id,
+            f"""🔔 *Настройка уведомлений*
 
 Текущие настройки:
 • Статус: {status}
@@ -917,9 +902,8 @@ class BotHandler(BaseHTTPRequestHandler):
 *Уведомления реально работают!* Бот будет присылать напоминания о предстоящих списаниях.
 
 Выберите новые настройки:""",
-            'parse_mode': 'Markdown',
-            'reply_markup': self.sub_manager.get_notifications_keyboard()
-        }
+            self.sub_manager.get_notifications_keyboard()
+        )
     
     def _handle_notification_setting(self, chat_id, text):
         """Обработка изменения настроек уведомлений"""
@@ -934,7 +918,8 @@ class BotHandler(BaseHTTPRequestHandler):
         elif text == '🔕 Выключить':
             settings.update({'is_active': False})
         else:
-            return self._show_notifications_settings(chat_id)
+            self._show_notifications_settings(chat_id)
+            return
         
         success = self.db.set_notification_settings(chat_id, settings)
         
@@ -951,25 +936,23 @@ class BotHandler(BaseHTTPRequestHandler):
         else:
             response_text = '❌ *Ошибка сохранения настроек*'
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': response_text,
-            'parse_mode': 'Markdown',
-            'reply_markup': self.sub_manager.get_main_keyboard()
-        }
+        self._send_telegram_message(
+            chat_id,
+            response_text,
+            self.sub_manager.get_main_keyboard()
+        )
     
     def _show_analytics(self, chat_id):
         """Показывает аналитику по подпискам"""
         subscriptions = self.db.get_user_subscriptions(chat_id)
         
         if not subscriptions:
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': 'У вас пока нет подписок для анализа.',
-                'reply_markup': self.sub_manager.get_main_keyboard()
-            }
+            self._send_telegram_message(
+                chat_id,
+                'У вас пока нет подписок для анализа.',
+                self.sub_manager.get_main_keyboard()
+            )
+            return
         
         total_monthly = sum(price for _, _, price, _, _ in subscriptions)
         total_yearly = total_monthly * 12
@@ -990,20 +973,17 @@ class BotHandler(BaseHTTPRequestHandler):
         
         analytics_text += f"\n💡 *Совет:* Проверяйте подписки раз в месяц"
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': analytics_text,
-            'parse_mode': 'Markdown',
-            'reply_markup': self.sub_manager.get_main_keyboard()
-        }
+        self._send_telegram_message(
+            chat_id,
+            analytics_text,
+            self.sub_manager.get_main_keyboard()
+        )
     
     def _show_laws(self, chat_id):
         """Правовая информация"""
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': """⚖️ *Федеральный закон № 376-ФЗ от 15.10.2025*
+        self._send_telegram_message(
+            chat_id,
+            """⚖️ *Федеральный закон № 376-ФЗ от 15.10.2025*
 
 *Ключевые положения:*
 
@@ -1014,67 +994,50 @@ class BotHandler(BaseHTTPRequestHandler):
 *Вступает в силу:* 1 марта 2026 года
 
 *Наш сервис помогает контролировать подписки в соответствии с законодательством.*""",
-            'parse_mode': 'Markdown',
-            'reply_markup': self.sub_manager.get_main_keyboard()
-        }
+            self.sub_manager.get_main_keyboard()
+        )
     
     def _show_unsubscribe(self, chat_id):
         """Отмена подписок"""
         subscriptions = self.db.get_user_subscriptions(chat_id)
         
         if not subscriptions:
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': 'У вас нет активных подписок.',
-                'parse_mode': 'Markdown',
-                'reply_markup': self.sub_manager.get_main_keyboard()
-            }
+            self._send_telegram_message(
+                chat_id,
+                'У вас нет активных подписок.',
+                self.sub_manager.get_main_keyboard()
+            )
+            return
         
         keyboard = []
         for sub_id, name, price, day, next_date in subscriptions:
-            keyboard.append([{'text': f'❌ {name} (ID: {sub_id})'}])
+            keyboard.append([{'text': f'❌ {name}'}])
         
         keyboard.append([{'text': '🔙 Главное меню'}])
         
-        return {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': '🗑️ *Отмена подписок*\n\nВыберите подписку для удаления:',
-            'reply_markup': {'keyboard': keyboard, 'resize_keyboard': True},
-            'parse_mode': 'Markdown'
-        }
+        self._send_telegram_message(
+            chat_id,
+            '🗑️ *Отмена подписок*\n\nВыберите подписку для удаления:',
+            {'keyboard': keyboard, 'resize_keyboard': True}
+        )
     
-    def _delete_subscription(self, chat_id, subscription_text):
+    def _delete_subscription(self, chat_id, service_name):
         """Удаление подписки"""
-        try:
-            # Извлекаем ID из текста "Название (ID: 1)"
-            service_name = subscription_text.split(' (ID: ')[0]
-            success, message = self.db.delete_subscription(chat_id, service_name)
-            
-            if success:
-                response_text = f'✅ *Подписка удалена:* {service_name}'
-            else:
-                response_text = f'❌ *Ошибка:* {message}'
-            
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': response_text,
-                'parse_mode': 'Markdown',
-                'reply_markup': self.sub_manager.get_main_keyboard()
-            }
-        except:
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': '❌ Ошибка при удалении подписки',
-                'parse_mode': 'Markdown',
-                'reply_markup': self.sub_manager.get_main_keyboard()
-            }
+        success, message = self.db.delete_subscription(chat_id, service_name)
+        
+        if success:
+            response_text = f'✅ *Подписка удалена:* {service_name}'
+        else:
+            response_text = f'❌ *Ошибка:* {message}'
+        
+        self._send_telegram_message(
+            chat_id,
+            response_text,
+            self.sub_manager.get_main_keyboard()
+        )
     
     def _check_and_send_notifications(self):
-        """Проверка и отправка уведомлений (работает в фоне)"""
+        """Проверка и отправка уведомлений"""
         try:
             upcoming = self.db.get_upcoming_charges()
             
@@ -1087,16 +1050,11 @@ class BotHandler(BaseHTTPRequestHandler):
 
 Не забудьте проверить баланс! 💰"""
                 
-                # В реальном боте здесь был бы код отправки сообщения
-                print(f"🔔 УВЕДОМЛЕНИЕ для пользователя {reminder['user_id']}: {message}")
-                # self._send_telegram_message(reminder['user_id'], message)
+                # РЕАЛЬНАЯ отправка уведомления!
+                self._send_telegram_message(reminder['user_id'], message)
+                print(f"🔔 ОТПРАВЛЕНО УВЕДОМЛЕНИЕ пользователю {reminder['user_id']}")
                 
         except Exception as e:
             print(f"Ошибка отправки уведомлений: {e}")
-    
-    def _send_telegram_message(self, chat_id, text):
-        """Отправка сообщения через Telegram API (для реального использования)"""
-        # Этот метод будет работать когда бот подключен к Telegram API
-        pass
 
 handler = BotHandler
